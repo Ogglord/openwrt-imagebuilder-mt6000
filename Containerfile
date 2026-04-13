@@ -29,6 +29,8 @@ RUN if echo "${OPENWRT_BRANCH}" | grep -q "test6.18"; then \
     echo "CONFIG_IB=y" >> /openwrt/.config && \
     echo "CONFIG_IB_STANDALONE=y" >> /openwrt/.config
 
+ENV FORCE_UNSAFE_CONFIGURE=1
+
 RUN make defconfig
 RUN make -j"$(nproc)" download
 RUN make -j"$(nproc)" || make -j1 V=s

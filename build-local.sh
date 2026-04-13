@@ -39,6 +39,10 @@ else
   echo "" | tee -a "${LOG_FILE}"
   echo "=== Build FAILED (exit code: ${EXIT_CODE}) ===" | tee -a "${LOG_FILE}"
   echo "Full log: ${LOG_FILE}" | tee -a "${LOG_FILE}"
+
+  echo ""
+  echo "=== Asking Claude to diagnose and fix... ==="
+  tail -n 150 "${LOG_FILE}" | claude "This podman build failed for an OpenWrt MT6000 imagebuilder. The repo is at ${SCRIPT_DIR}. Read the build error below, find the relevant files in the repo, fix them, and tell me what you changed so I can re-run the build."
 fi
 
 exit $EXIT_CODE

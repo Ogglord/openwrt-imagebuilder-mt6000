@@ -1,0 +1,125 @@
+name: Build ImageBuilder Containers
+
+on:
+  schedule:
+    - cron: "0 4 * * 0" # Weekly Sunday 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      force_branch:
+        description: "Force build a specific branch (leave empty for auto-discover)"
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository_owner }}/openwrt-imagebuilder
+  HC_UUID: ${{ secrets.HEALTHCHECK_BUILD_UUID }}
+
+jobs:
+  discover:
+    runs-on: ubuntu-latest
+    outputs:
+      branches: ${{ steps.discover.outputs.branches }}
+    steps:
+      - name: Ping healthcheck start
+        run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${HC_UUID}/start" || true
+
+      - name: Discover branches from MT6000_cust_build
+        id: discover
+        env:
+          FORCE_BRANCH: ${{ inputs.force_branch }}
+        run: |
+          set -euo pipefail
+
+          if [[ -n "${FORCE_BRANCH:-}" ]]; then
+            echo "Force building branch: $FORCE_BRANCH"
+            echo "branches=[\"$FORCE_BRANCH\"]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # List directories in MT6000_cust_build via GitHub API
+          DIRS=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
+            -H "Accept: application/vnd.github.v3+json" | \
+            jq -r '.[] | select(.type == "dir") | .name' | \
+            grep -E '^[0-9]{4}' || true)
+
+          if [[ -z "$DIRS" ]]; then
+            echo "No release directories found"
+            echo "branches=[]" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # Extract branch name from each directory
+          # Pattern: {date}_{hash}_{branch-name}
+          # We want the most recent directory for each unique branch
+          declare -A LATEST_BY_BRANCH
+          while IFS= read -r dir; do
+            # Extract branch name: remove the date_hash_ prefix
+            branch=$(echo "$dir" | sed -E 's/^[0-9]{4}[._-][0-9]{2}[._-][0-9]{2}_r[0-9]+-?[a-f0-9]*_//')
+            if [[ -n "$branch" ]]; then
+              # Keep the latest (directories sort chronologically)
+              LATEST_BY_BRANCH["$branch"]="$dir"
+            fi
+          done <<< "$DIRS"
+
+          # Check which branches need building (no existing ghcr.io tag)
+          NEW_BRANCHES="[]"
+          for branch in "${!LATEST_BY_BRANCH[@]}"; do
+            TAG="mediatek-filogic-${branch}"
+            echo "Checking tag: ${REGISTRY}/${IMAGE_NAME}:${TAG}"
+
+            if ! docker manifest inspect "${REGISTRY}/${IMAGE_NAME}:${TAG}" > /dev/null 2>&1; then
+              echo "  -> NEW: will build"
+              NEW_BRANCHES=$(echo "$NEW_BRANCHES" | jq -c --arg b "$branch" '. + [$b]')
+            else
+              echo "  -> exists, skipping"
+            fi
+          done
+
+          echo "Branches to build: $NEW_BRANCHES"
+          echo "branches=$NEW_BRANCHES" >> "$GITHUB_OUTPUT"
+
+  build:
+    needs: discover
+    if: ${{ needs.discover.outputs.branches != '[]' && needs.discover.outputs.branches != '' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 360
+    permissions:
+      contents: read
+      packages: write
+    strategy:
+      matrix:
+        branch: ${{ fromJson(needs.discover.outputs.branches) }}
+      fail-fast: false
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push (${{ matrix.branch }})
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Containerfile
+          push: true
+          build-args: |
+            OPENWRT_BRANCH=${{ matrix.branch }}
+          tags: |
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ matrix.branch }}
+
+      - name: Ping healthcheck success
+        if: success()
+        run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}" || true
+
+      - name: Ping healthcheck failure
+        if: failure()
+        run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true

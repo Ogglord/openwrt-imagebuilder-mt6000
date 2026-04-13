@@ -62,22 +62,10 @@ jobs:
             fi
           done <<< "$DIRS"
 
-          # Check which branches need building (no existing ghcr.io tag)
-          NEW_BRANCHES="[]"
-          for branch in "${!LATEST_BY_BRANCH[@]}"; do
-            TAG="mediatek-filogic-${branch}"
-            echo "Checking tag: ${REGISTRY}/${IMAGE_NAME}:${TAG}"
-
-            if ! docker manifest inspect "${REGISTRY}/${IMAGE_NAME}:${TAG}" > /dev/null 2>&1; then
-              echo "  -> NEW: will build"
-              NEW_BRANCHES=$(echo "$NEW_BRANCHES" | jq -c --arg b "$branch" '. + [$b]')
-            else
-              echo "  -> exists, skipping"
-            fi
-          done
-
-          echo "Branches to build: $NEW_BRANCHES"
-          echo "branches=$NEW_BRANCHES" >> "$GITHUB_OUTPUT"
+          # Always build only the single latest branch
+          LATEST_BRANCH=$(echo "$DIRS" | sort | tail -1 | sed -E 's/^[0-9]{4}[._-][0-9]{2}[._-][0-9]{2}_r[0-9]+-?[a-f0-9]*_//')
+          echo "Building latest branch: $LATEST_BRANCH"
+          echo "branches=[\"$LATEST_BRANCH\"]" >> "$GITHUB_OUTPUT"
 
   build:
     needs: discover

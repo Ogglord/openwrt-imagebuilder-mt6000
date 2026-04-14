@@ -106,14 +106,6 @@ jobs:
                 updates: "dev",
                 package_changes: [],
                 targets: {"mediatek/filogic": $key}
-              },
-              "SNAPSHOT": {
-                name: $name,
-                enabled: true,
-                path: $path,
-                path_packages: ($path + "/packages/{arch}/{feedname}"),
-                updates: "dev",
-                targets: {"mediatek/filogic": $key}
               }
             }' > entry.json
 

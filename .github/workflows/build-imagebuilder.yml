@@ -172,6 +172,13 @@ jobs:
           fi
           VERSION=$(grep -E '^PKG_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
           HASH=$(grep -E '^PKG_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+          PKG_COMMIT=$(grep -E '^PKG_SOURCE_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+          if [[ -z "$VERSION" || -z "$PKG_COMMIT" ]]; then
+            echo "Could not parse VERSION or PKG_SOURCE_VERSION from $PACKAGE_MK — skipping pre-fetch"
+            echo "Makefile contents:"
+            cat "$PACKAGE_MK"
+            exit 0
+          fi
           SOURCE="linux-firmware-${VERSION}.tar.zst"
           DL_DIR="${{ runner.temp }}/openwrt/dl"
           mkdir -p "$DL_DIR"
@@ -179,10 +186,9 @@ jobs:
             echo "Already present in dl/: $SOURCE"
             exit 0
           fi
-          echo "Cloning pesa1234/linux-firmware at version $VERSION with LFS..."
+          echo "Cloning pesa1234/linux-firmware at version $VERSION ($PKG_COMMIT) with LFS..."
           git clone --filter=blob:none https://github.com/pesa1234/linux-firmware.git "${{ runner.temp }}/linux-firmware-src"
           cd "${{ runner.temp }}/linux-firmware-src"
-          PKG_COMMIT=$(grep -E '^PKG_SOURCE_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
           git checkout "$PKG_COMMIT"
           git lfs pull
           SUBDIR="linux-firmware-${VERSION}"

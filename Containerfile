@@ -40,10 +40,12 @@ RUN make defconfig
 RUN make -j"$(nproc)" download IGNORE_ERRORS=m
 RUN make -j"$(nproc)" || make -j1 V=s
 
-# Stage the imagebuilder tarball at a known path regardless of dated output dir
+# Stage the imagebuilder tarball at a known path regardless of dated output dir,
+# then wipe the build tree to free disk space on the runner before the next stage
 RUN mkdir -p /output && \
     find /openwrt/bin -name "*imagebuilder*.tar.*" | head -1 | xargs -I{} cp {} /output/ && \
-    ls -lh /output/
+    ls -lh /output/ && \
+    rm -rf /openwrt/build_dir /openwrt/staging_dir /openwrt/dl /openwrt/.git
 
 # Stage 2: Slim runtime containing only the ImageBuilder
 FROM debian:bookworm-slim

@@ -1,0 +1,22 @@
+name: Ping Healthchecks.io
+
+on:
+  workflow_run:
+    workflows: ["Build ImageBuilder Containers"]
+    types: [completed]
+
+jobs:
+  ping-success:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    steps:
+      - run: curl -fsS -m 10 --retry 5 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}" || true
+
+  ping-failure:
+    runs-on: ubuntu-latest
+    if: ${{ github.event.workflow_run.conclusion == 'failure' }}
+    steps:
+      - run: |
+          curl -fsS -m 10 --retry 5 \
+            --data-raw "Build failed: ${{ github.event.workflow_run.html_url }}" \
+            "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true

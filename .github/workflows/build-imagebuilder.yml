@@ -141,6 +141,7 @@ jobs:
           llvm-config --version || llvm-config-18 --version || echo "llvm-config not found"
           which llvm-config llvm-config-18 clang clang-18 2>/dev/null || true
           LLVM_PATH=$(llvm-config --bindir 2>/dev/null | sed 's|/bin$||' || llvm-config-18 --bindir 2>/dev/null | sed 's|/bin$||' || echo "/usr")
+          echo "Using LLVM_PATH: ${LLVM_PATH}"
           echo "CONFIG_BPF_TOOLCHAIN_HOST_PATH=\"${LLVM_PATH}\"" >> .config
           echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config

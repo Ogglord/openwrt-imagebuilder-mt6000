@@ -234,8 +234,6 @@ jobs:
         run: |
           LOG_TAIL=$(tail -c 8000 /tmp/openwrt-build.log 2>/dev/null || echo "No build log captured")
           curl -fsS -m 10 --retry 3 \
-            --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
-
-${LOG_TAIL}" \
+            --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
             "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
 

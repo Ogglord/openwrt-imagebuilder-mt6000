@@ -81,7 +81,7 @@ jobs:
   build:
     needs: discover
     if: needs.discover.outputs.new_commits == 'true'
-    runs-on: ${{ inputs.use_self_hosted && 'self-hosted' || 'ubuntu-latest' }}
+    runs-on: "${{ inputs.use_self_hosted == true && 'self-hosted' || 'ubuntu-latest' }}"
     timeout-minutes: 360
     permissions:
       contents: write

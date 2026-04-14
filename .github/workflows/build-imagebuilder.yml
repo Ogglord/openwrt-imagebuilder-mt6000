@@ -118,22 +118,22 @@ jobs:
 
       - name: Clean previous build
         if: inputs.use_self_hosted == true
-        run: rm -rf /opt/openwrt
+        run: rm -rf ${{ runner.temp }}/openwrt
 
       - name: Clone OpenWrt source
         run: |
           git clone --depth 1 -b "${{ needs.discover.outputs.branch }}" \
-            https://github.com/pesa1234/openwrt.git /opt/openwrt
+            https://github.com/pesa1234/openwrt.git ${{ runner.temp }}/openwrt
 
       - name: Update and install feeds
-        working-directory: /opt/openwrt
+        working-directory: ${{ runner.temp }}/openwrt
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           ./scripts/feeds install -a
 
       - name: Download and apply config
-        working-directory: /opt/openwrt
+        working-directory: ${{ runner.temp }}/openwrt
         run: |
           if echo "${{ needs.discover.outputs.branch }}" | grep -q "test6.18"; then
             CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/config_file/test6.18/.config"
@@ -162,7 +162,7 @@ jobs:
           LC_ALL: C
 
       - name: Download package sources
-        working-directory: /opt/openwrt
+        working-directory: ${{ runner.temp }}/openwrt
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           TAR_OPTIONS: --no-same-owner
@@ -175,7 +175,7 @@ jobs:
           }
 
       - name: Build OpenWrt
-        working-directory: /opt/openwrt
+        working-directory: ${{ runner.temp }}/openwrt
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           TAR_OPTIONS: --no-same-owner
@@ -190,11 +190,11 @@ jobs:
 
       - name: Extract imagebuilder tarball into Docker build context
         run: |
-          TARBALL=$(find /opt/openwrt/bin -name "*imagebuilder*.tar.*" | head -1)
+          TARBALL=$(find ${{ runner.temp }}/openwrt/bin -name "*imagebuilder*.tar.*" | head -1)
           echo "Found: $TARBALL"
           cp "$TARBALL" "$GITHUB_WORKSPACE/"
           ls -lh "$GITHUB_WORKSPACE/"*imagebuilder*.tar.*
-          rm -rf /opt/openwrt
+          rm -rf ${{ runner.temp }}/openwrt
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3

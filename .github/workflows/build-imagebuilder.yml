@@ -134,6 +134,9 @@ jobs:
           echo "CONFIG_IB=y" >> .config
           echo "CONFIG_IB_STANDALONE=y" >> .config
           echo "CONFIG_BPF_TOOLCHAIN_HOST=y" >> .config
+          echo "CONFIG_USE_LLVM_HOST=y" >> .config
+          LLVM_PATH=$(llvm-config --bindir 2>/dev/null | sed 's|/bin$||' || echo "/usr")
+          echo "CONFIG_BPF_TOOLCHAIN_HOST_PATH=\"${LLVM_PATH}\"" >> .config
           echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config
           make defconfig

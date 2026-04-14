@@ -297,6 +297,7 @@ jobs:
           push: true
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${{ needs.discover.outputs.branch }}
 
       - name: Create release to record built commit
         env:
@@ -317,4 +318,3 @@ jobs:
           curl -fsS -m 10 --retry 3 \
             --data-binary "Containerize failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
-

@@ -130,6 +130,15 @@ jobs:
           ./scripts/feeds install -a
           ./scripts/feeds install -a
 
+      - name: Patch Makefile defaults to match openssl build
+        working-directory: ${{ runner.temp }}/openwrt
+        run: |
+          # This build uses openssl variants; patch the imagebuilder metadata so
+          # DEFAULT_PACKAGES reflects what was actually compiled (not mbedtls).
+          sed -i 's/wpad-basic-mbedtls/wpad-openssl/g' target/linux/mediatek/filogic/target.mk
+          sed -i 's/libustream-mbedtls/libustream-openssl/g' include/target.mk
+          sed -i 's/apk-mbedtls/apk-openssl/g' include/default-packages.mk
+
       - name: Download and apply config
         working-directory: ${{ runner.temp }}/openwrt
         run: |

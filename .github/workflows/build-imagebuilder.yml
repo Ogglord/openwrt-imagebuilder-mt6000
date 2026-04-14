@@ -63,8 +63,9 @@ jobs:
           LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${LATEST_BRANCH}" --jq .sha)
           echo "Latest commit SHA: $LATEST_SHA"
 
-          # Check if we already built this commit (SHA stored in latest release body)
-          ALREADY_BUILT=$(gh api "repos/${{ github.repository }}/releases/latest" --jq .body 2>/dev/null | grep -c "${LATEST_SHA}" || true)
+          # Check if we already built this commit (SHA stored in per-branch release body)
+          TAG="mediatek-filogic-${LATEST_BRANCH}"
+          ALREADY_BUILT=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" --jq .body 2>/dev/null | grep -c "${LATEST_SHA}" || true)
 
           if [[ "$ALREADY_BUILT" -gt 0 ]]; then
             echo "Commit ${LATEST_SHA} already built — skipping"
@@ -202,7 +203,9 @@ jobs:
             zstd -T0 --ultra -20 -c > "$DL_DIR/$SOURCE"
           rm -rf "$SUBDIR" linux-firmware-src
           ACTUAL_HASH=$(sha256sum "$DL_DIR/$SOURCE" | cut -d' ' -f1)
-          if [ "$ACTUAL_HASH" != "$HASH" ]; then
+          if [ -z "$HASH" ]; then
+            echo "No PKG_HASH in Makefile — skipping hash verification, keeping pre-fetched file"
+          elif [ "$ACTUAL_HASH" != "$HASH" ]; then
             echo "WARNING: hash mismatch after LFS pre-fetch (got $ACTUAL_HASH, expected $HASH)"
             echo "Removing so make download can attempt its own fallback"
             rm "$DL_DIR/$SOURCE"
@@ -303,7 +306,6 @@ jobs:
           gh release delete "${TAG}" --cleanup-tag -y --repo "${{ github.repository }}" 2>/dev/null || true
           gh release create "${TAG}" \
             --repo "${{ github.repository }}" \
-            --latest \
             --title "ImageBuilder: ${{ needs.discover.outputs.branch }}" \
             --notes "**Branch:** ${{ needs.discover.outputs.branch }}
           **Commit:** ${{ needs.discover.outputs.commit_sha }}

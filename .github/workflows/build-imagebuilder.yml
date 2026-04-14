@@ -165,7 +165,7 @@ jobs:
           # download fallback uses `git archive` which omits LFS content, producing
           # a wrong hash. We clone with LFS here and pack the tarball manually so
           # make download finds a correctly-hashed file in dl/ and skips re-downloading.
-          PACKAGE_MK="${{ runner.temp }}/openwrt/package/firmware/linux-firmware/aeonsemi.mk"
+          PACKAGE_MK="${{ runner.temp }}/openwrt/package/firmware/linux-firmware/Makefile"
           if [ ! -f "$PACKAGE_MK" ]; then
             echo "Package makefile not found, skipping pre-fetch"
             exit 0

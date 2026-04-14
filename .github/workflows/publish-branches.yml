@@ -1,0 +1,182 @@
+name: Publish branches.json
+
+on:
+  workflow_run:
+    workflows: ["Build ImageBuilder Containers"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      branch_filter:
+        description: "Only include a specific branch key (leave empty to rebuild from all releases)"
+        required: false
+        type: string
+
+jobs:
+  list:
+    runs-on: ubuntu-latest
+    if: ${{ github.event_name == 'workflow_dispatch' || github.event.workflow_run.conclusion == 'success' }}
+    outputs:
+      matrix: ${{ steps.list.outputs.matrix }}
+    steps:
+      - name: List built branches from releases
+        id: list
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH_FILTER: ${{ inputs.branch_filter }}
+        run: |
+          set -euo pipefail
+
+          RELEASES=$(gh api "repos/${{ github.repository }}/releases" --paginate \
+            --jq '.[].tag_name' | grep '^mediatek-filogic-' | \
+            sed 's/^mediatek-filogic-//' || true)
+
+          if [[ -z "$RELEASES" ]]; then
+            echo "No releases found"
+            echo 'matrix=[]' >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if [[ -n "${BRANCH_FILTER:-}" ]]; then
+            RELEASES=$(echo "$RELEASES" | grep "^${BRANCH_FILTER}$" || true)
+          fi
+
+          MATRIX=$(echo "$RELEASES" | jq -R . | jq -sc .)
+          echo "matrix=${MATRIX}" >> "$GITHUB_OUTPUT"
+          echo "Branches to process: $MATRIX"
+
+  resolve:
+    needs: list
+    if: needs.list.outputs.matrix != '[]'
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        branch_key: ${{ fromJson(needs.list.outputs.matrix) }}
+      fail-fast: false
+    steps:
+      - name: Find path in MT6000_cust_build
+        id: resolve
+        run: |
+          set -euo pipefail
+          BRANCH_KEY="${{ matrix.branch_key }}"
+
+          ALL_DIRS=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
+            -H "Accept: application/vnd.github.v3+json" | \
+            jq -r '.[] | select(.type == "dir") | .name' | \
+            grep -E '^[0-9]{4}' | sort || true)
+
+          BUILD_PATH=$(echo "$ALL_DIRS" | grep "_${BRANCH_KEY}$" | tail -1 || true)
+
+          if [[ -z "$BUILD_PATH" ]]; then
+            echo "No path found for ${BRANCH_KEY} in MT6000_cust_build — skipping"
+            exit 0
+          fi
+
+          echo "build_path=${BUILD_PATH}" >> "$GITHUB_OUTPUT"
+          echo "Resolved: ${BRANCH_KEY} → ${BUILD_PATH}"
+
+      - name: Build branch entry JSON
+        if: steps.resolve.outputs.build_path != ''
+        run: |
+          BRANCH_KEY="${{ matrix.branch_key }}"
+          BUILD_PATH="${{ steps.resolve.outputs.build_path }}"
+
+          # Derive display name: strip "next-" prefix and ".rss.mtk" segment
+          # e.g. next-r4.8.0.rss.mtk-test6.18 → r4.8.0-test6.18
+          NAME=$(echo "$BRANCH_KEY" | sed 's/^next-//' | sed 's/\.rss\.mtk//')
+
+          jq -n \
+            --arg key "$BRANCH_KEY" \
+            --arg name "$NAME" \
+            --arg path "$BUILD_PATH" \
+            '{
+              ($key): {
+                name: $name,
+                enabled: true,
+                path: $path,
+                path_packages: ($path + "/packages/{arch}/{feedname}"),
+                updates: "dev",
+                targets: {"mediatek/filogic": $key}
+              }
+            }' > entry.json
+
+          echo "Entry:"
+          cat entry.json
+
+      - name: Upload branch entry
+        if: steps.resolve.outputs.build_path != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: branch-entry-${{ matrix.branch_key }}
+          path: entry.json
+          retention-days: 1
+
+  publish:
+    needs: resolve
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download all branch entries
+        uses: actions/download-artifact@v4
+        with:
+          pattern: branch-entry-*
+          path: entries/
+          merge-multiple: true
+
+      - name: Merge entries into branches.json
+        id: merge
+        run: |
+          set -euo pipefail
+
+          ENTRY_FILES=$(ls entries/*.json 2>/dev/null || true)
+          if [[ -z "$ENTRY_FILES" ]]; then
+            echo "No entries to publish"
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          jq -s 'add | to_entries | sort_by(.key) | from_entries' entries/*.json > branches.json
+
+          echo "Final branches.json:"
+          cat branches.json
+
+      - name: Ensure releases branch exists
+        if: steps.merge.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api "repos/${{ github.repository }}/git/refs/heads/releases" 2>/dev/null || \
+            gh api "repos/${{ github.repository }}/git/refs" \
+              --method POST \
+              --field ref="refs/heads/releases" \
+              --field sha="$(git rev-parse HEAD)"
+
+      - name: Push branches.json to releases branch
+        if: steps.merge.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILE_SHA=$(gh api "repos/${{ github.repository }}/contents/branches.json?ref=releases" \
+            --jq '.sha' 2>/dev/null || echo '')
+
+          ENCODED=$(base64 -w0 < branches.json)
+
+          if [[ -n "$FILE_SHA" ]]; then
+            gh api "repos/${{ github.repository }}/contents/branches.json" \
+              --method PUT \
+              --field message="ci: publish branches.json" \
+              --field content="$ENCODED" \
+              --field sha="$FILE_SHA" \
+              --field branch="releases"
+          else
+            gh api "repos/${{ github.repository }}/contents/branches.json" \
+              --method PUT \
+              --field message="ci: publish branches.json" \
+              --field content="$ENCODED" \
+              --field branch="releases"
+          fi
+
+          echo "branches.json published to releases branch"
+          echo "URL: https://raw.githubusercontent.com/${{ github.repository }}/releases/branches.json"

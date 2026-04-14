@@ -106,7 +106,7 @@ jobs:
             build-essential clang flex bison g++ gawk gcc-multilib \
             g++-multilib gettext git libncurses-dev libssl-dev \
             python3-setuptools rsync swig unzip \
-            zlib1g-dev file wget curl zstd llvm
+            zlib1g-dev file wget curl zstd
           sudo apt-get autoremove -y && sudo apt-get clean -y
 
       - name: Clone OpenWrt source
@@ -137,7 +137,10 @@ jobs:
           sed -i '/CONFIG_USE_LLVM_HOST/d' .config
           echo "CONFIG_BPF_TOOLCHAIN_HOST=y" >> .config
           echo "CONFIG_USE_LLVM_HOST=y" >> .config
-          LLVM_PATH=$(llvm-config --bindir 2>/dev/null | sed 's|/bin$||' || echo "/usr")
+          echo "LLVM tools on PATH:"
+          llvm-config --version || llvm-config-18 --version || echo "llvm-config not found"
+          which llvm-config llvm-config-18 clang clang-18 2>/dev/null || true
+          LLVM_PATH=$(llvm-config --bindir 2>/dev/null | sed 's|/bin$||' || llvm-config-18 --bindir 2>/dev/null | sed 's|/bin$||' || echo "/usr")
           echo "CONFIG_BPF_TOOLCHAIN_HOST_PATH=\"${LLVM_PATH}\"" >> .config
           echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config

@@ -133,6 +133,8 @@ jobs:
           curl -fsSL "${CONFIG_URL}" -o .config
           echo "CONFIG_IB=y" >> .config
           echo "CONFIG_IB_STANDALONE=y" >> .config
+          sed -i '/CONFIG_BPF_TOOLCHAIN/d' .config
+          sed -i '/CONFIG_USE_LLVM_HOST/d' .config
           echo "CONFIG_BPF_TOOLCHAIN_HOST=y" >> .config
           echo "CONFIG_USE_LLVM_HOST=y" >> .config
           LLVM_PATH=$(llvm-config --bindir 2>/dev/null | sed 's|/bin$||' || echo "/usr")

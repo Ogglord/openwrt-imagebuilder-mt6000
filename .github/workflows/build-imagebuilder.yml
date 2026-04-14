@@ -83,9 +83,6 @@ jobs:
     if: needs.discover.outputs.new_commits == 'true'
     runs-on: "${{ inputs.use_self_hosted == true && 'self-hosted' || 'ubuntu-latest' }}"
     timeout-minutes: 360
-    permissions:
-      contents: write
-      packages: write
 
     steps:
       - name: Ping healthcheck start
@@ -188,13 +185,44 @@ jobs:
             make -j1 V=s
           }
 
-      - name: Extract imagebuilder tarball into Docker build context
+      - name: Extract imagebuilder tarball
         run: |
           TARBALL=$(find ${{ runner.temp }}/openwrt/bin -name "*imagebuilder*.tar.*" | head -1)
           echo "Found: $TARBALL"
           cp "$TARBALL" "$GITHUB_WORKSPACE/"
           ls -lh "$GITHUB_WORKSPACE/"*imagebuilder*.tar.*
           rm -rf ${{ runner.temp }}/openwrt
+
+      - name: Upload imagebuilder tarball as artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: imagebuilder-tarball
+          path: "*imagebuilder*.tar.*"
+          retention-days: 1
+
+      - name: Ping healthcheck failure with log
+        if: failure()
+        run: |
+          LOG_TAIL=$(tail -c 8000 /tmp/openwrt-build.log 2>/dev/null || echo "No build log captured")
+          curl -fsS -m 10 --retry 3 \
+            --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
+            "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
+
+  containerize:
+    needs: [discover, build]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Download imagebuilder tarball
+        uses: actions/download-artifact@v4
+        with:
+          name: imagebuilder-tarball
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
@@ -229,11 +257,10 @@ jobs:
           **Commit:** ${{ needs.discover.outputs.commit_sha }}
           **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`"
 
-      - name: Ping healthcheck failure with log
+      - name: Ping healthcheck failure
         if: failure()
         run: |
-          LOG_TAIL=$(tail -c 8000 /tmp/openwrt-build.log 2>/dev/null || echo "No build log captured")
           curl -fsS -m 10 --retry 3 \
-            --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
+            --data-binary "Containerize failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
 

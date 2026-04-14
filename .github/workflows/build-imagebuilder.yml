@@ -158,6 +158,51 @@ jobs:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C
 
+      - name: Pre-fetch linux-firmware via git-lfs
+        run: |
+          # pesa1234/linux-firmware uses git-lfs for binary blobs. The OpenWrt
+          # download fallback uses `git archive` which omits LFS content, producing
+          # a wrong hash. We clone with LFS here and pack the tarball manually so
+          # make download finds a correctly-hashed file in dl/ and skips re-downloading.
+          PACKAGE_MK="${{ runner.temp }}/openwrt/package/firmware/linux-firmware/aeonsemi.mk"
+          if [ ! -f "$PACKAGE_MK" ]; then
+            echo "Package makefile not found, skipping pre-fetch"
+            exit 0
+          fi
+          VERSION=$(grep -E '^PKG_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+          HASH=$(grep -E '^PKG_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+          SOURCE="linux-firmware-${VERSION}.tar.zst"
+          DL_DIR="${{ runner.temp }}/openwrt/dl"
+          mkdir -p "$DL_DIR"
+          if [ -f "$DL_DIR/$SOURCE" ]; then
+            echo "Already present in dl/: $SOURCE"
+            exit 0
+          fi
+          echo "Cloning pesa1234/linux-firmware at version $VERSION with LFS..."
+          git clone --filter=blob:none https://github.com/pesa1234/linux-firmware.git "${{ runner.temp }}/linux-firmware-src"
+          cd "${{ runner.temp }}/linux-firmware-src"
+          PKG_COMMIT=$(grep -E '^PKG_SOURCE_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+          git checkout "$PKG_COMMIT"
+          git lfs pull
+          SUBDIR="linux-firmware-${VERSION}"
+          TAR_TIMESTAMP=$(git log -1 --no-show-signature --format='@%ct')
+          cd "${{ runner.temp }}"
+          mkdir -p "$SUBDIR"
+          cp -a linux-firmware-src/. "$SUBDIR/"
+          rm -rf "$SUBDIR/.git" "$SUBDIR/.gitmodules"
+          tar --numeric-owner --owner=0 --group=0 --mode=a-s --sort=name \
+            --mtime="$TAR_TIMESTAMP" -c "$SUBDIR" | \
+            zstd -T0 --ultra -20 -c > "$DL_DIR/$SOURCE"
+          rm -rf "$SUBDIR" linux-firmware-src
+          ACTUAL_HASH=$(sha256sum "$DL_DIR/$SOURCE" | cut -d' ' -f1)
+          if [ "$ACTUAL_HASH" != "$HASH" ]; then
+            echo "WARNING: hash mismatch after LFS pre-fetch (got $ACTUAL_HASH, expected $HASH)"
+            echo "Removing so make download can attempt its own fallback"
+            rm "$DL_DIR/$SOURCE"
+          else
+            echo "Hash verified: $SOURCE"
+          fi
+
       - name: Download package sources
         working-directory: ${{ runner.temp }}/openwrt
         env:

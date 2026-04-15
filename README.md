@@ -2,6 +2,14 @@
 
 Builds an OpenWrt ImageBuilder container from [pesa1234/openwrt](https://github.com/pesa1234/openwrt) for the GL.iNet Flint 2 (MT6000).
 
+> **Related repos:**
+>
+> | Repo | Purpose |
+> |------|---------|
+> | [Ogglord/asu](https://github.com/Ogglord/asu) | ASU application (fork of openwrt/asu) -- the FastAPI server and worker |
+> | [Ogglord/asu-deploy](https://github.com/Ogglord/asu-deploy) | Deployment config (compose, config, deploy script) |
+> | [Ogglord/openwrt-imagebuilder-mt6000](https://github.com/Ogglord/openwrt-imagebuilder-mt6000) | This repo -- CI workflows that build ImageBuilder containers from pesa1234's branches |
+
 ## How it works
 
 1. A weekly GitHub Action checks [pesa1234/MT6000_cust_build](https://github.com/pesa1234/MT6000_cust_build) for new release branches

@@ -63,9 +63,12 @@ jobs:
           # branches.json entry (upstream ASU convention)
           # Key = branch name (without -SNAPSHOT); ASU's get_branch() strips
           # the -SNAPSHOT suffix from the firmware version to derive this key.
+          # MT6000 uses aarch64_cortex-a53 for mediatek/filogic target
+          ARCH="aarch64_cortex-a53"
+
           jq -n \
             --arg key "$BRANCH_KEY" \
-            --arg version "$VERSION" \
+            --arg arch "$ARCH" \
             '{
               ($key): {
                 enabled: true,
@@ -73,13 +76,12 @@ jobs:
                 path: "releases/{version}",
                 path_packages: "DEPRECATED",
                 package_changes: [],
-                targets: {"mediatek/filogic": $version}
+                targets: {"mediatek/filogic": $arch}
               }
             }' > "output/entry-${BRANCH_KEY}.json"
 
-          # .targets.json for upstream ASU compatibility
-          # Consumed by ASU server to map target → imagebuilder tag
-          jq -n --arg version "$VERSION" '{"mediatek/filogic": $version}' \
+          # .targets.json maps target → arch (upstream ASU convention)
+          jq -n --arg arch "$ARCH" '{"mediatek/filogic": $arch}' \
             > "output/targets-${BRANCH_KEY}.json"
 
           echo "Branch entry:"

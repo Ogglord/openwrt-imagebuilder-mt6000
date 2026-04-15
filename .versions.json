@@ -1,10 +1,9 @@
 {
-  "upcoming_version": "next-r4.8.0.rss.mtk-test6.18-SNAPSHOT",
-  "stable_version": "next-r4.8.0.rss.mtk-test6.18-SNAPSHOT",
+  "upcoming_version": "4.8-SNAPSHOT",
+  "stable_version": "4.8-SNAPSHOT",
   "oldstable_version": "",
   "versions_list": [
-    "next-r4.8.0.rss.mtk-test6.18-SNAPSHOT",
-    "next-r4.8.0.rss.mtk-SNAPSHOT",
-    "next-r4.7.4.rss.mtk-SNAPSHOT"
+    "4.8-SNAPSHOT",
+    "4.7-SNAPSHOT"
   ]
 }

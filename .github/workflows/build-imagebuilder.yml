@@ -281,19 +281,19 @@ jobs:
           cp "$TARBALL" "$GITHUB_WORKSPACE/"
           ls -lh "$GITHUB_WORKSPACE/"*imagebuilder*.tar.*
 
-      - name: Collect and stage packages
+      - name: Collect packages and target metadata
         run: |
           set -euo pipefail
           OPENWRT="${{ runner.temp }}/openwrt"
           ARCH="aarch64_cortex-a53"
-          STAGING="${{ runner.temp }}/pkg-staging/${ARCH}"
+          STAGING="${{ runner.temp }}/pkg-staging"
 
-          mkdir -p "${STAGING}"
+          mkdir -p "${STAGING}/packages/${ARCH}"
 
           # Copy feed packages as-is (already signed with our key by make)
           for FEED_DIR in "${OPENWRT}/bin/packages/${ARCH}"/*/; do
             FEED=$(basename "${FEED_DIR}")
-            DEST="${STAGING}/${FEED}"
+            DEST="${STAGING}/packages/${ARCH}/${FEED}"
             mkdir -p "${DEST}"
             cp "${FEED_DIR}"*.apk "${DEST}/" 2>/dev/null || true
             cp "${FEED_DIR}"packages.adb "${DEST}/" 2>/dev/null || true
@@ -303,23 +303,34 @@ jobs:
           # Collect target packages (kmods)
           TARGET_PKGS="${OPENWRT}/bin/targets/mediatek/filogic/packages"
           if [ -d "${TARGET_PKGS}" ]; then
-            DEST="${STAGING}/kmods"
+            DEST="${STAGING}/packages/${ARCH}/kmods"
             mkdir -p "${DEST}"
             cp "${TARGET_PKGS}"/*.apk "${DEST}/" 2>/dev/null || true
             cp "${TARGET_PKGS}"/packages.adb "${DEST}/" 2>/dev/null || true
             cp "${TARGET_PKGS}"/index.json "${DEST}/" 2>/dev/null || true
           fi
 
-          # Generate sha256sums across the whole arch tree
-          (cd "${STAGING}" && \
+          # Generate sha256sums for packages
+          (cd "${STAGING}/packages/${ARCH}" && \
             find . -name '*.apk' -o -name 'packages.adb' -o -name 'index.json' | \
             sort | xargs sha256sum > sha256sums)
 
-          echo "Total packages: $(find "${STAGING}" -name '*.apk' | wc -l)"
+          echo "Total packages: $(find "${STAGING}/packages" -name '*.apk' | wc -l)"
+
+          # Collect target metadata (profiles.json, buildinfo, etc.)
+          TARGET_DIR="${OPENWRT}/bin/targets/mediatek/filogic"
+          for f in profiles.json config.buildinfo feeds.buildinfo version.buildinfo sha256sums; do
+            [ -f "${TARGET_DIR}/${f}" ] && cp "${TARGET_DIR}/${f}" "${STAGING}/"
+          done
+          # Copy the device manifest if present
+          cp "${TARGET_DIR}"/*.manifest "${STAGING}/" 2>/dev/null || true
+
+          echo "Collected metadata:"
+          ls -lh "${STAGING}"/*.json "${STAGING}"/*.buildinfo 2>/dev/null || true
 
           # Bundle for artifact handoff to containerize job
           tar -czf "$GITHUB_WORKSPACE/packages-staging.tar.gz" \
-            -C "${{ runner.temp }}/pkg-staging" .
+            -C "${STAGING}" .
 
       - name: Upload imagebuilder tarball as artifact
         uses: actions/upload-artifact@v4
@@ -367,7 +378,7 @@ jobs:
         with:
           name: packages-staging
 
-      - name: Publish packages to releases branch
+      - name: Publish packages and metadata to releases branch
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -381,21 +392,21 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
             /tmp/releases-branch
 
-          # Replace packages for this tag (idempotent on re-run)
-          rm -rf "/tmp/releases-branch/packages/${TAG}"
-          mkdir -p "/tmp/releases-branch/packages/${TAG}"
-          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/packages/${TAG}/"
+          # Replace build output for this tag (idempotent on re-run)
+          rm -rf "/tmp/releases-branch/targets/${TAG}"
+          mkdir -p "/tmp/releases-branch/targets/${TAG}"
+          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/targets/${TAG}/"
 
-          # Prune: keep only the 3 most recent package tag directories
-          cd /tmp/releases-branch/packages
+          # Prune: keep only the 3 most recent tag directories
+          cd /tmp/releases-branch/targets
           ls -t | tail -n +4 | xargs -r rm -rf
 
           cd /tmp/releases-branch
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add packages/
-          git diff --cached --quiet && echo "No package changes" && exit 0
-          git commit -m "ci: publish packages for ${TAG}"
+          git add targets/
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "ci: publish packages and metadata for ${TAG}"
 
           for i in 1 2 3; do
             git push origin releases && break
@@ -421,7 +432,7 @@ jobs:
           file: ./Containerfile
           push: true
           build-args: |
-            PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/packages/mediatek-filogic-${{ needs.discover.outputs.branch }}/aarch64_cortex-a53
+            PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/mediatek-filogic-${{ needs.discover.outputs.branch }}/packages/aarch64_cortex-a53
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${{ needs.discover.outputs.branch }}
@@ -438,7 +449,7 @@ jobs:
             --notes "**Branch:** ${{ needs.discover.outputs.branch }}
           **Commit:** ${{ needs.discover.outputs.commit_sha }}
           **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
-          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/packages/${TAG}/" \
+          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/${TAG}/packages/" \
             packages-staging.tar.gz
 
       - name: Ping healthcheck failure

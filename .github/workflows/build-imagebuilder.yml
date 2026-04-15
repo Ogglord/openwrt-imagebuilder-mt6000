@@ -229,7 +229,9 @@ jobs:
             exit 0
           fi
           VERSION=$(grep -E '^PKG_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
-          HASH=$(grep -E '^PKG_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+          # Try PKG_MIRROR_HASH first (used for git sources), fall back to PKG_HASH
+          HASH=$(grep -E '^PKG_MIRROR_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+          [ -z "$HASH" ] && HASH=$(grep -E '^PKG_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
           PKG_COMMIT=$(grep -E '^PKG_SOURCE_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
           if [[ -z "$VERSION" || -z "$PKG_COMMIT" ]]; then
             echo "Could not parse VERSION or PKG_SOURCE_VERSION from $PACKAGE_MK — skipping pre-fetch"
@@ -261,7 +263,7 @@ jobs:
           rm -rf "$SUBDIR" linux-firmware-src
           ACTUAL_HASH=$(sha256sum "$DL_DIR/$SOURCE" | cut -d' ' -f1)
           if [ -z "$HASH" ]; then
-            echo "No PKG_HASH in Makefile — skipping hash verification, keeping pre-fetched file"
+            echo "No PKG_HASH or PKG_MIRROR_HASH in Makefile — skipping hash verification"
           elif [ "$ACTUAL_HASH" != "$HASH" ]; then
             echo "WARNING: hash mismatch after LFS pre-fetch (got $ACTUAL_HASH, expected $HASH)"
             echo "Removing so make download can attempt its own fallback"

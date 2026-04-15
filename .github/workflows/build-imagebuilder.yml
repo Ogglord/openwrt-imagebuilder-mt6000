@@ -123,7 +123,21 @@ jobs:
           git clone --depth 1 -b "${{ needs.discover.outputs.branch }}" \
             https://github.com/pesa1234/openwrt.git ${{ runner.temp }}/openwrt
 
-      - name: Restore dl/ cache
+      - name: Cache dl/ directory
+        run: |
+          if [[ "${{ inputs.use_self_hosted }}" == "true" ]]; then
+            # Self-hosted: use a persistent local directory (no network overhead)
+            mkdir -p "$HOME/.cache/openwrt-dl"
+            ln -sf "$HOME/.cache/openwrt-dl" "${{ runner.temp }}/openwrt/dl"
+            echo "Linked dl/ to local cache ($HOME/.cache/openwrt-dl)"
+            echo "Cached files: $(ls "$HOME/.cache/openwrt-dl" | wc -l)"
+          else
+            # GitHub-hosted: just create dl/ — actions/cache handles persistence
+            mkdir -p "${{ runner.temp }}/openwrt/dl"
+          fi
+
+      - name: Restore dl/ cache (GitHub-hosted)
+        if: inputs.use_self_hosted != true
         uses: actions/cache@v4
         with:
           path: ${{ runner.temp }}/openwrt/dl

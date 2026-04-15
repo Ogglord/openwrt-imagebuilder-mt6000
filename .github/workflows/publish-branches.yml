@@ -53,7 +53,7 @@ jobs:
         branch_key: ${{ fromJson(needs.list.outputs.matrix) }}
       fail-fast: false
     steps:
-      - name: Build branch entry JSON
+      - name: Build branch entry and metadata files
         run: |
           BRANCH_KEY="${{ matrix.branch_key }}"
           TAG="mediatek-filogic-${BRANCH_KEY}"
@@ -64,6 +64,9 @@ jobs:
           # e.g. next-r4.8.0.rss.mtk-test6.18 → r4.8.0-test6.18
           NAME=$(echo "$BRANCH_KEY" | sed 's/^next-//' | sed 's/\.rss\.mtk//')
 
+          mkdir -p output
+
+          # branches.json entry (for backward-compat / BRANCHES_URL consumers)
           jq -n \
             --arg key "$BRANCH_KEY" \
             --arg name "$NAME" \
@@ -88,16 +91,23 @@ jobs:
                 package_changes: [],
                 targets: {"mediatek/filogic": $key}
               }
-            }' > entry.json
+            }' > "output/entry-${BRANCH_KEY}.json"
 
-          echo "Entry:"
-          cat entry.json
+          # .targets.json for upstream ASU compatibility
+          # Consumed by ASU server to map target → imagebuilder tag
+          jq -n --arg key "$BRANCH_KEY" '{"mediatek/filogic": $key}' \
+            > "output/targets-${BRANCH_KEY}.json"
 
-      - name: Upload branch entry
+          echo "Branch entry:"
+          cat "output/entry-${BRANCH_KEY}.json"
+          echo ".targets.json:"
+          cat "output/targets-${BRANCH_KEY}.json"
+
+      - name: Upload branch artifacts
         uses: actions/upload-artifact@v7
         with:
           name: branch-entry-${{ matrix.branch_key }}
-          path: entry.json
+          path: output/
           retention-days: 1
 
   publish:
@@ -120,17 +130,41 @@ jobs:
         run: |
           set -euo pipefail
 
-          ENTRY_FILES=$(ls entries/*.json 2>/dev/null || true)
+          ENTRY_FILES=$(ls entries/entry-*.json 2>/dev/null || true)
           if [[ -z "$ENTRY_FILES" ]]; then
             echo "No entries to publish"
             echo "skip=true" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          jq -s 'add | to_entries | sort_by(.key) | from_entries' entries/*.json > branches.json
+          jq -s 'add | to_entries | sort_by(.key) | from_entries' entries/entry-*.json > branches.json
 
           echo "Final branches.json:"
           cat branches.json
+
+      - name: Generate .versions.json
+        if: steps.merge.outputs.skip != 'true'
+        run: |
+          # All versioned keys (non-SNAPSHOT), sorted newest first
+          VERSIONS=$(jq -r 'keys[] | select(. != "SNAPSHOT")' branches.json | sort -rV)
+          LATEST=$(echo "$VERSIONS" | head -1)
+          OLDSTABLE=$(echo "$VERSIONS" | sed -n '2p')
+          VERSIONS_JSON=$(echo "$VERSIONS" | jq -R . | jq -sc .)
+
+          jq -n \
+            --arg upcoming "$LATEST" \
+            --arg stable "$LATEST" \
+            --arg oldstable "${OLDSTABLE:-}" \
+            --argjson versions_list "$VERSIONS_JSON" \
+            '{
+              upcoming_version: $upcoming,
+              stable_version: $stable,
+              oldstable_version: $oldstable,
+              versions_list: $versions_list
+            }' > .versions.json
+
+          echo "Generated .versions.json:"
+          cat .versions.json
 
       - name: Ensure releases branch exists
         if: steps.merge.outputs.skip != 'true'
@@ -168,5 +202,71 @@ jobs:
               --field branch="releases"
           fi
 
-          echo "branches.json published to releases branch"
-          echo "URL: https://raw.githubusercontent.com/${{ github.repository }}/releases/branches.json"
+          echo "branches.json published"
+
+      - name: Push .versions.json to releases branch
+        if: steps.merge.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILE_SHA=$(gh api "repos/${{ github.repository }}/contents/.versions.json?ref=releases" \
+            --jq '.sha' 2>/dev/null || echo '')
+
+          ENCODED=$(base64 -w0 < .versions.json)
+
+          if [[ -n "$FILE_SHA" ]]; then
+            gh api "repos/${{ github.repository }}/contents/.versions.json" \
+              --method PUT \
+              --field message="ci: publish .versions.json" \
+              --field content="$ENCODED" \
+              --field sha="$FILE_SHA" \
+              --field branch="releases"
+          else
+            gh api "repos/${{ github.repository }}/contents/.versions.json" \
+              --method PUT \
+              --field message="ci: publish .versions.json" \
+              --field content="$ENCODED" \
+              --field branch="releases"
+          fi
+
+          echo ".versions.json published"
+
+      - name: Push .targets.json for each release
+        if: steps.merge.outputs.skip != 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          for targets_file in entries/targets-*.json; do
+            BRANCH_KEY=$(basename "$targets_file" | sed 's/^targets-//' | sed 's/\.json$//')
+            TAG="mediatek-filogic-${BRANCH_KEY}"
+            DEST_PATH="targets/${TAG}/.targets.json"
+
+            echo "Pushing ${DEST_PATH}..."
+
+            FILE_SHA=$(gh api "repos/${{ github.repository }}/contents/${DEST_PATH}?ref=releases" \
+              --jq '.sha' 2>/dev/null || echo '')
+
+            ENCODED=$(base64 -w0 < "$targets_file")
+
+            if [[ -n "$FILE_SHA" ]]; then
+              gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
+                --method PUT \
+                --field message="ci: publish .targets.json for ${TAG}" \
+                --field content="$ENCODED" \
+                --field sha="$FILE_SHA" \
+                --field branch="releases"
+            else
+              gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
+                --method PUT \
+                --field message="ci: publish .targets.json for ${TAG}" \
+                --field content="$ENCODED" \
+                --field branch="releases"
+            fi
+
+            echo "  Done: ${DEST_PATH}"
+          done
+
+          echo "All .targets.json files published"
+          echo ""
+          echo "=== Deploy complete ==="
+          echo "URL: https://raw.githubusercontent.com/${{ github.repository }}/releases/.versions.json"

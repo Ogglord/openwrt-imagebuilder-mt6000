@@ -46,5 +46,9 @@ RUN if [ -n "${PACKAGES_BASE_URL}" ]; then \
       fi; \
     fi
 
+# ASU runs `setup.sh` for snapshot builds. Upstream imagebuilders ship one
+# that updates feeds; ours are fully pre-built so a no-op suffices.
+RUN printf '#!/bin/sh\nexit 0\n' > /builder/setup.sh && chmod +x /builder/setup.sh
+
 WORKDIR /builder
 USER buildbot

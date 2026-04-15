@@ -1,0 +1,183 @@
+name: Build Firmware via ASU
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Pesa branch (e.g. next-r4.8.0.rss.mtk-test6.18)"
+        required: true
+        type: string
+      profile:
+        description: "Device profile"
+        required: true
+        default: "glinet_gl-mt6000"
+        type: string
+      packages:
+        description: "Extra packages (space-separated, prefix with - to remove)"
+        required: false
+        default: "luci luci-app-attendedsysupgrade"
+        type: string
+      asu_url:
+        description: "ASU server URL"
+        required: true
+        default: "https://asu.ogglord.com"
+        type: string
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Request firmware build
+        id: request
+        run: |
+          set -euo pipefail
+
+          VERSION="${{ inputs.branch }}-SNAPSHOT"
+          ASU="${{ inputs.asu_url }}"
+
+          # Build packages JSON array from space-separated input
+          PACKAGES_JSON=$(echo '${{ inputs.packages }}' | tr ' ' '\n' | jq -R . | jq -sc .)
+
+          echo "Requesting build:"
+          echo "  Version: $VERSION"
+          echo "  Target:  mediatek/filogic"
+          echo "  Profile: ${{ inputs.profile }}"
+          echo "  Packages: $PACKAGES_JSON"
+          echo ""
+
+          RESPONSE=$(curl -sS -X POST "${ASU}/api/v1/build" \
+            -H "Content-Type: application/json" \
+            -d "$(jq -n \
+              --arg version "$VERSION" \
+              --arg profile "${{ inputs.profile }}" \
+              --argjson packages "$PACKAGES_JSON" \
+              '{
+                version: $version,
+                target: "mediatek/filogic",
+                profile: $profile,
+                packages: $packages
+              }')")
+
+          echo "Response:"
+          echo "$RESPONSE" | jq .
+
+          STATUS=$(echo "$RESPONSE" | jq -r '.status')
+          HASH=$(echo "$RESPONSE" | jq -r '.request_hash // empty')
+
+          if [[ -z "$HASH" ]]; then
+            echo "::error::No request_hash in response"
+            echo "$RESPONSE" | jq -r '.detail // .stderr // "Unknown error"'
+            exit 1
+          fi
+
+          echo "request_hash=$HASH" >> "$GITHUB_OUTPUT"
+          echo "Request hash: $HASH"
+
+      - name: Wait for build to complete
+        id: poll
+        run: |
+          set -euo pipefail
+
+          ASU="${{ inputs.asu_url }}"
+          HASH="${{ steps.request.outputs.request_hash }}"
+          URL="${ASU}/api/v1/build/${HASH}"
+          MAX_WAIT=600
+          ELAPSED=0
+
+          echo "Polling: $URL"
+          while true; do
+            RESPONSE=$(curl -sS "$URL")
+            DETAIL=$(echo "$RESPONSE" | jq -r '.detail')
+            IB_STATUS=$(echo "$RESPONSE" | jq -r '.imagebuilder_status // "unknown"')
+
+            echo "[${ELAPSED}s] ${DETAIL} (imagebuilder: ${IB_STATUS})"
+
+            if [[ "$DETAIL" == "done" ]]; then
+              echo ""
+              echo "Build succeeded!"
+              echo "$RESPONSE" | jq .
+              echo "response<<RESPONSE_EOF" >> "$GITHUB_OUTPUT"
+              echo "$RESPONSE" >> "$GITHUB_OUTPUT"
+              echo "RESPONSE_EOF" >> "$GITHUB_OUTPUT"
+              break
+            fi
+
+            if echo "$DETAIL" | grep -qi "failed\|error"; then
+              echo ""
+              echo "::error::Build failed: $DETAIL"
+              echo "$RESPONSE" | jq .
+              exit 1
+            fi
+
+            if [[ $ELAPSED -ge $MAX_WAIT ]]; then
+              echo "::error::Build timed out after ${MAX_WAIT}s"
+              exit 1
+            fi
+
+            sleep 10
+            ELAPSED=$((ELAPSED + 10))
+          done
+
+      - name: Download firmware image
+        run: |
+          set -euo pipefail
+
+          ASU="${{ inputs.asu_url }}"
+          RESPONSE='${{ steps.poll.outputs.response }}'
+
+          # Extract the sysupgrade image URL
+          IMAGE=$(echo "$RESPONSE" | jq -r '.image_prefix // empty')
+          if [[ -z "$IMAGE" ]]; then
+            echo "No image_prefix in response — listing available files:"
+            echo "$RESPONSE" | jq '.images // empty'
+            # Try to get the sysupgrade image from the images array
+            IMAGE_PATH=$(echo "$RESPONSE" | jq -r '.images[] | select(.type == "sysupgrade") | .name' 2>/dev/null || true)
+            if [[ -z "$IMAGE_PATH" ]]; then
+              echo "::warning::Could not find sysupgrade image in response"
+              exit 0
+            fi
+            HASH=$(echo "$RESPONSE" | jq -r '.request_hash')
+            DOWNLOAD_URL="${ASU}/store/${HASH}/${IMAGE_PATH}"
+          else
+            HASH=$(echo "$RESPONSE" | jq -r '.request_hash')
+            # List all images and download sysupgrade
+            IMAGE_PATH=$(echo "$RESPONSE" | jq -r '.images[] | select(.type == "sysupgrade") | .name')
+            DOWNLOAD_URL="${ASU}/store/${HASH}/${IMAGE_PATH}"
+          fi
+
+          echo "Downloading: $DOWNLOAD_URL"
+          mkdir -p firmware
+          curl -fsSL "$DOWNLOAD_URL" -o "firmware/${IMAGE_PATH}"
+          ls -lh firmware/
+          sha256sum firmware/*
+
+      - name: Upload firmware artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-${{ inputs.branch }}-${{ inputs.profile }}
+          path: firmware/
+          retention-days: 30
+
+      - name: Summary
+        run: |
+          RESPONSE='${{ steps.poll.outputs.response }}'
+          VERSION=$(echo "$RESPONSE" | jq -r '.request.version')
+          PROFILE=$(echo "$RESPONSE" | jq -r '.request.profile')
+          HASH=$(echo "$RESPONSE" | jq -r '.request_hash')
+          IMAGES=$(echo "$RESPONSE" | jq -r '.images[] | "- \(.name) (\(.type), \(.sha256))"')
+
+          cat >> "$GITHUB_STEP_SUMMARY" <<EOF
+          ## Firmware Build
+
+          | | |
+          |---|---|
+          | **Version** | \`${VERSION}\` |
+          | **Profile** | \`${PROFILE}\` |
+          | **Request hash** | \`${HASH}\` |
+
+          ### Images
+          ${IMAGES}
+
+          Download the firmware from the **Artifacts** section above.
+          EOF

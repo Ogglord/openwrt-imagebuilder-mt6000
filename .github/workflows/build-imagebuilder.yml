@@ -325,7 +325,13 @@ jobs:
             find . -name '*.apk' -o -name 'packages.adb' -o -name 'index.json' | \
             sort | xargs sha256sum > sha256sums)
 
-          echo "Total packages: $(find "${STAGING}/packages" -name '*.apk' | wc -l)"
+          PKG_COUNT=$(find "${STAGING}/packages" -name '*.apk' | wc -l)
+          echo "Total packages: ${PKG_COUNT}"
+          if [ "${PKG_COUNT}" -eq 0 ]; then
+            echo "::error::No packages found — check build output structure"
+            find "${OPENWRT}/bin" -maxdepth 4 -type d | head -30
+            exit 1
+          fi
 
           # Collect target metadata (profiles.json, buildinfo, etc.)
           if [ -n "${TARGET_BASE}" ]; then

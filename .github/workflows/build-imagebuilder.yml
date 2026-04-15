@@ -89,7 +89,7 @@ jobs:
       - name: Ping healthcheck start
         run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/start" || true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Free disk space
         if: inputs.use_self_hosted == false
@@ -138,7 +138,7 @@ jobs:
 
       - name: Restore dl/ cache (GitHub-hosted)
         if: inputs.use_self_hosted != true
-        uses: actions/cache@v4
+        uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/openwrt/dl
           key: openwrt-dl-${{ needs.discover.outputs.branch }}-${{ needs.discover.outputs.commit_sha }}
@@ -423,21 +423,21 @@ jobs:
           ls -lh "$GITHUB_WORKSPACE/profiles-json/profiles.json"
 
       - name: Upload profiles.json artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: profiles-json
           path: profiles-json/profiles.json
           retention-days: 1
 
       - name: Upload imagebuilder tarball as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: imagebuilder-tarball
           path: "*imagebuilder*.tar.*"
           retention-days: 1
 
       - name: Upload packages artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: packages-staging
           path: packages-staging.tar.gz
@@ -472,15 +472,15 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
       - name: Download imagebuilder tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: imagebuilder-tarball
 
       - name: Download packages artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: packages-staging
 
@@ -559,7 +559,7 @@ jobs:
             packages-staging.tar.gz
 
       - name: Download profiles.json artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v5
         with:
           name: profiles-json
           path: profiles-json/

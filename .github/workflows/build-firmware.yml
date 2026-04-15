@@ -159,7 +159,7 @@ jobs:
           sha256sum firmware/*
 
       - name: Upload firmware artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v5
         with:
           name: firmware-${{ inputs.branch }}-${{ inputs.profile }}
           path: firmware/

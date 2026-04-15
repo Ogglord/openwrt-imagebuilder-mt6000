@@ -79,6 +79,8 @@ jobs:
         run: |
           BRANCH_KEY="${{ matrix.branch_key }}"
           BUILD_PATH="${{ steps.resolve.outputs.build_path }}"
+          TAG="mediatek-filogic-${BRANCH_KEY}"
+          PACKAGES_BASE="https://raw.githubusercontent.com/${{ github.repository }}/releases/packages/${TAG}/aarch64_cortex-a53"
 
           # Derive display name: strip "next-" prefix and ".rss.mtk" segment
           # e.g. next-r4.8.0.rss.mtk-test6.18 → r4.8.0-test6.18
@@ -88,12 +90,13 @@ jobs:
             --arg key "$BRANCH_KEY" \
             --arg name "$NAME" \
             --arg path "$BUILD_PATH" \
+            --arg pkgs_base "${PACKAGES_BASE}" \
             '{
               ($key): {
                 name: $name,
                 enabled: true,
                 path: $path,
-                path_packages: ($path + "/packages/{arch}/{feedname}"),
+                path_packages: ($pkgs_base + "/{feedname}"),
                 updates: "dev",
                 package_changes: [],
                 targets: {"mediatek/filogic": $key}
@@ -102,7 +105,7 @@ jobs:
                 name: $name,
                 enabled: true,
                 path: $path,
-                path_packages: ($path + "/packages/{arch}/{feedname}"),
+                path_packages: ($pkgs_base + "/{feedname}"),
                 updates: "dev",
                 package_changes: [],
                 targets: {"mediatek/filogic": $key}

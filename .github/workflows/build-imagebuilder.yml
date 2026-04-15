@@ -175,6 +175,25 @@ jobs:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C
 
+      - name: Inject APK signing key
+        working-directory: ${{ runner.temp }}/openwrt
+        env:
+          PACKAGE_SIGNING_KEY: ${{ secrets.PACKAGE_SIGNING_KEY }}
+          PACKAGE_SIGNING_KEY_PUB: ${{ secrets.PACKAGE_SIGNING_KEY_PUB }}
+        run: |
+          set -euo pipefail
+
+          # Write RSA keypair for build-time package signing
+          printf '%s\n' "${PACKAGE_SIGNING_KEY}" > key-build.rsa
+          chmod 600 key-build.rsa
+          printf '%s\n' "${PACKAGE_SIGNING_KEY_PUB}" > key-build.rsa.pub
+
+          # Embed public key in firmware rootfs so APK trusts our packages on-device
+          mkdir -p files/etc/apk/keys
+          cp key-build.rsa.pub files/etc/apk/keys/pesabuilder-signing.rsa.pub
+
+          echo "Signing key injected, public key embedded in firmware at files/etc/apk/keys/"
+
       - name: Pre-fetch linux-firmware via git-lfs
         run: |
           # pesa1234/linux-firmware uses git-lfs for binary blobs. The OpenWrt
@@ -261,7 +280,46 @@ jobs:
           echo "Found: $TARBALL"
           cp "$TARBALL" "$GITHUB_WORKSPACE/"
           ls -lh "$GITHUB_WORKSPACE/"*imagebuilder*.tar.*
-          rm -rf ${{ runner.temp }}/openwrt
+
+      - name: Collect and stage packages
+        run: |
+          set -euo pipefail
+          OPENWRT="${{ runner.temp }}/openwrt"
+          ARCH="aarch64_cortex-a53"
+          STAGING="${{ runner.temp }}/pkg-staging/${ARCH}"
+
+          mkdir -p "${STAGING}"
+
+          # Copy feed packages as-is (already signed with our key by make)
+          for FEED_DIR in "${OPENWRT}/bin/packages/${ARCH}"/*/; do
+            FEED=$(basename "${FEED_DIR}")
+            DEST="${STAGING}/${FEED}"
+            mkdir -p "${DEST}"
+            cp "${FEED_DIR}"*.apk "${DEST}/" 2>/dev/null || true
+            cp "${FEED_DIR}"packages.adb "${DEST}/" 2>/dev/null || true
+            cp "${FEED_DIR}"index.json "${DEST}/" 2>/dev/null || true
+          done
+
+          # Collect target packages (kmods)
+          TARGET_PKGS="${OPENWRT}/bin/targets/mediatek/filogic/packages"
+          if [ -d "${TARGET_PKGS}" ]; then
+            DEST="${STAGING}/kmods"
+            mkdir -p "${DEST}"
+            cp "${TARGET_PKGS}"/*.apk "${DEST}/" 2>/dev/null || true
+            cp "${TARGET_PKGS}"/packages.adb "${DEST}/" 2>/dev/null || true
+            cp "${TARGET_PKGS}"/index.json "${DEST}/" 2>/dev/null || true
+          fi
+
+          # Generate sha256sums across the whole arch tree
+          (cd "${STAGING}" && \
+            find . -name '*.apk' -o -name 'packages.adb' -o -name 'index.json' | \
+            sort | xargs sha256sum > sha256sums)
+
+          echo "Total packages: $(find "${STAGING}" -name '*.apk' | wc -l)"
+
+          # Bundle for artifact handoff to containerize job
+          tar -czf "$GITHUB_WORKSPACE/packages-staging.tar.gz" \
+            -C "${{ runner.temp }}/pkg-staging" .
 
       - name: Upload imagebuilder tarball as artifact
         uses: actions/upload-artifact@v4
@@ -269,6 +327,16 @@ jobs:
           name: imagebuilder-tarball
           path: "*imagebuilder*.tar.*"
           retention-days: 1
+
+      - name: Upload packages artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: packages-staging
+          path: packages-staging.tar.gz
+          retention-days: 1
+
+      - name: Cleanup openwrt build dir
+        run: rm -rf ${{ runner.temp }}/openwrt
 
       - name: Ping healthcheck failure with log
         if: failure()
@@ -294,6 +362,48 @@ jobs:
         with:
           name: imagebuilder-tarball
 
+      - name: Download packages artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: packages-staging
+
+      - name: Publish packages to releases branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="mediatek-filogic-${{ needs.discover.outputs.branch }}"
+
+          mkdir -p /tmp/pkg-staging
+          tar -xzf packages-staging.tar.gz -C /tmp/pkg-staging
+
+          git clone --depth=1 --branch=releases \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            /tmp/releases-branch
+
+          # Replace packages for this tag (idempotent on re-run)
+          rm -rf "/tmp/releases-branch/packages/${TAG}"
+          mkdir -p "/tmp/releases-branch/packages/${TAG}"
+          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/packages/${TAG}/"
+
+          # Prune: keep only the 3 most recent package tag directories
+          cd /tmp/releases-branch/packages
+          ls -t | tail -n +4 | xargs -r rm -rf
+
+          cd /tmp/releases-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add packages/
+          git diff --cached --quiet && echo "No package changes" && exit 0
+          git commit -m "ci: publish packages for ${TAG}"
+
+          for i in 1 2 3; do
+            git push origin releases && break
+            echo "Push failed (attempt $i), retrying..."
+            sleep 10
+            git pull --rebase origin releases
+          done
+
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v3
 
@@ -310,6 +420,8 @@ jobs:
           context: .
           file: ./Containerfile
           push: true
+          build-args: |
+            PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/packages/mediatek-filogic-${{ needs.discover.outputs.branch }}/aarch64_cortex-a53
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${{ needs.discover.outputs.branch }}
@@ -325,7 +437,9 @@ jobs:
             --title "ImageBuilder: ${{ needs.discover.outputs.branch }}" \
             --notes "**Branch:** ${{ needs.discover.outputs.branch }}
           **Commit:** ${{ needs.discover.outputs.commit_sha }}
-          **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`"
+          **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
+          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/packages/${TAG}/" \
+            packages-staging.tar.gz
 
       - name: Ping healthcheck failure
         if: failure()

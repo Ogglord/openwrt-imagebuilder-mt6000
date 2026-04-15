@@ -28,5 +28,23 @@ RUN mkdir -p /builder && \
       /builder/.config && \
     chown -R buildbot:buildbot /builder
 
+# Patch APK repositories to point to our signed package feed so firmware
+# built by ASU uses our repo instead of pesa1234's for post-flash installs.
+ARG PACKAGES_BASE_URL=""
+RUN if [ -n "${PACKAGES_BASE_URL}" ]; then \
+      REPOS_FILE=$(find /builder -maxdepth 1 -name "repositories.conf" -o -name "repositories" 2>/dev/null | head -1); \
+      if [ -n "${REPOS_FILE}" ]; then \
+        echo "Patching ${REPOS_FILE} with ${PACKAGES_BASE_URL}"; \
+        cat "${REPOS_FILE}"; \
+        echo "---"; \
+        sed -i "s|https://raw.githubusercontent.com/pesa1234/MT6000_cust_build[^ ]*|${PACKAGES_BASE_URL}|g" \
+          "${REPOS_FILE}" && \
+        cat "${REPOS_FILE}"; \
+      else \
+        echo "WARNING: No repositories config found in /builder — listing candidates:"; \
+        find /builder -maxdepth 3 -name "repositories*" -o -name "distfeeds*" 2>/dev/null || true; \
+      fi; \
+    fi
+
 WORKDIR /builder
 USER buildbot

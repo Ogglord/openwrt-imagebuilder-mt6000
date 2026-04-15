@@ -9,10 +9,6 @@ on:
         description: "Force build a specific branch (leave empty for auto-discover)"
         required: false
         type: string
-      asu_version_override:
-        description: "Override ASU version (required for test branches, e.g. 4.618)"
-        required: false
-        type: string
       use_self_hosted:
         description: "Run build on self-hosted runner"
         required: true
@@ -36,7 +32,6 @@ jobs:
         id: discover
         env:
           FORCE_BRANCH: ${{ inputs.force_branch }}
-          ASU_VERSION_OVERRIDE: ${{ inputs.asu_version_override }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -56,14 +51,7 @@ jobs:
             echo "Force building branch: $FORCE_BRANCH"
             ASU_VER=$(derive_asu_version "$FORCE_BRANCH")
             if [[ "$ASU_VER" == "SKIP" ]]; then
-              if [[ -n "${ASU_VERSION_OVERRIDE:-}" ]]; then
-                ASU_VER="$ASU_VERSION_OVERRIDE"
-                echo "Test branch — using override ASU version: $ASU_VER"
-              else
-                echo "::error::Test branch requires asu_version_override (e.g. 4.618)"
-                echo "new_commits=false" >> "$GITHUB_OUTPUT"
-                exit 0
-              fi
+              echo "Test branch — container-only build (no ASU integration)"
             fi
             LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${FORCE_BRANCH}" --jq .sha)
             echo "branch=${FORCE_BRANCH}" >> "$GITHUB_OUTPUT"
@@ -229,10 +217,15 @@ jobs:
           # instead of "SNAPSHOT". This allows ASU to resolve the correct
           # imagebuilder container tag without custom patches.
           # Done after defconfig so it cannot be overridden by defaults.
-          sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
-          echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.asu_version }}-SNAPSHOT\"" >> .config
-          sed -i '/^CONFIG_VERSION_REPO=/d' .config
-          echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
+          ASU_VER="${{ needs.discover.outputs.asu_version }}"
+          if [[ "$ASU_VER" != "SKIP" ]]; then
+            sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
+            echo "CONFIG_VERSION_NUMBER=\"${ASU_VER}-SNAPSHOT\"" >> .config
+            sed -i '/^CONFIG_VERSION_REPO=/d' .config
+            echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
+          else
+            echo "Test branch — keeping default version string"
+          fi
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C
@@ -568,6 +561,16 @@ jobs:
           username: ${{ github.actor }}
           password: ${{ secrets.GITHUB_TOKEN }}
 
+      - name: Compute container tags
+        id: tags
+        run: |
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}"
+          ASU_VER="${{ needs.discover.outputs.asu_version }}"
+          if [[ "$ASU_VER" != "SKIP" ]]; then
+            TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${ASU_VER}"
+          fi
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
       - name: Build and push (${{ needs.discover.outputs.branch }})
         uses: docker/build-push-action@v6
         with:
@@ -576,9 +579,7 @@ jobs:
           push: true
           build-args: |
             PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/mediatek-filogic-${{ needs.discover.outputs.branch }}/packages/aarch64_cortex-a53
-          tags: |
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${{ needs.discover.outputs.asu_version }}
+          tags: ${{ steps.tags.outputs.tags }}
 
       - name: Create release to record built commit
         env:
@@ -596,12 +597,14 @@ jobs:
             packages-staging.tar.gz
 
       - name: Download profiles.json artifact
+        if: needs.discover.outputs.asu_version != 'SKIP'
         uses: actions/download-artifact@v5
         with:
           name: profiles-json
           path: profiles-json/
 
       - name: Publish profiles.json to releases branch
+        if: needs.discover.outputs.asu_version != 'SKIP'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |

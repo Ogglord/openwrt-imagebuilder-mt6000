@@ -244,7 +244,7 @@ jobs:
             VERSION=$(grep -E '^PKG_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
             PKG_COMMIT=$(grep -E '^PKG_SOURCE_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
             MIRROR_HASH=$(grep -E '^PKG_MIRROR_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
-            SOURCE="linux-firmware-${VERSION}.tar.xz"
+            SOURCE="linux-firmware-${VERSION}.tar.zst"
           fi
 
           if [[ -z "$VERSION" || -z "$PKG_COMMIT" ]]; then

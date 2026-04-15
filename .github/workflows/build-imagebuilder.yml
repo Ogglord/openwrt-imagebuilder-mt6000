@@ -123,6 +123,15 @@ jobs:
           git clone --depth 1 -b "${{ needs.discover.outputs.branch }}" \
             https://github.com/pesa1234/openwrt.git ${{ runner.temp }}/openwrt
 
+      - name: Restore dl/ cache
+        uses: actions/cache@v4
+        with:
+          path: ${{ runner.temp }}/openwrt/dl
+          key: openwrt-dl-${{ needs.discover.outputs.branch }}-${{ needs.discover.outputs.commit_sha }}
+          restore-keys: |
+            openwrt-dl-${{ needs.discover.outputs.branch }}-
+            openwrt-dl-
+
       - name: Update and install feeds
         working-directory: ${{ runner.temp }}/openwrt
         run: |

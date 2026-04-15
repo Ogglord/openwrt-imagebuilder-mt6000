@@ -257,8 +257,20 @@ jobs:
           DL_DIR="${{ runner.temp }}/openwrt/dl"
           mkdir -p "$DL_DIR"
           if [ -f "$DL_DIR/$SOURCE" ]; then
-            echo "Already present in dl/: $SOURCE"
-            exit 0
+            if [ -n "$MIRROR_HASH" ]; then
+              CACHED_HASH=$(sha256sum "$DL_DIR/$SOURCE" | cut -d' ' -f1)
+              if [ "$CACHED_HASH" = "$MIRROR_HASH" ]; then
+                echo "Cached dl/$SOURCE hash matches PKG_MIRROR_HASH — skipping"
+                exit 0
+              else
+                echo "Cached dl/$SOURCE hash mismatch (cached=$CACHED_HASH, expected=$MIRROR_HASH)"
+                echo "Removing stale cached file and re-fetching"
+                rm "$DL_DIR/$SOURCE"
+              fi
+            else
+              echo "Already present in dl/: $SOURCE (no MIRROR_HASH to verify)"
+              exit 0
+            fi
           fi
 
           echo "Source: $SOURCE"

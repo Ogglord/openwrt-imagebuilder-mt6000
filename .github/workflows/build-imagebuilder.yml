@@ -288,26 +288,36 @@ jobs:
           ARCH="aarch64_cortex-a53"
           STAGING="${{ runner.temp }}/pkg-staging"
 
+          # pesa1234's fork nests bin/ output under a dated subdirectory,
+          # so discover paths dynamically instead of hardcoding.
+          PKG_BASE=$(find "${OPENWRT}/bin" -type d -path "*packages/${ARCH}" | head -1)
+          TARGET_BASE=$(find "${OPENWRT}/bin" -type d -path "*targets/mediatek/filogic" | head -1)
+
+          echo "Packages base: ${PKG_BASE:-NOT FOUND}"
+          echo "Targets base: ${TARGET_BASE:-NOT FOUND}"
+
           mkdir -p "${STAGING}/packages/${ARCH}"
 
           # Copy feed packages as-is (already signed with our key by make)
-          for FEED_DIR in "${OPENWRT}/bin/packages/${ARCH}"/*/; do
-            FEED=$(basename "${FEED_DIR}")
-            DEST="${STAGING}/packages/${ARCH}/${FEED}"
-            mkdir -p "${DEST}"
-            cp "${FEED_DIR}"*.apk "${DEST}/" 2>/dev/null || true
-            cp "${FEED_DIR}"packages.adb "${DEST}/" 2>/dev/null || true
-            cp "${FEED_DIR}"index.json "${DEST}/" 2>/dev/null || true
-          done
+          if [ -n "${PKG_BASE}" ]; then
+            for FEED_DIR in "${PKG_BASE}"/*/; do
+              [ -d "${FEED_DIR}" ] || continue
+              FEED=$(basename "${FEED_DIR}")
+              DEST="${STAGING}/packages/${ARCH}/${FEED}"
+              mkdir -p "${DEST}"
+              cp "${FEED_DIR}"*.apk "${DEST}/" 2>/dev/null || true
+              cp "${FEED_DIR}"packages.adb "${DEST}/" 2>/dev/null || true
+              cp "${FEED_DIR}"index.json "${DEST}/" 2>/dev/null || true
+            done
+          fi
 
           # Collect target packages (kmods)
-          TARGET_PKGS="${OPENWRT}/bin/targets/mediatek/filogic/packages"
-          if [ -d "${TARGET_PKGS}" ]; then
+          if [ -n "${TARGET_BASE}" ] && [ -d "${TARGET_BASE}/packages" ]; then
             DEST="${STAGING}/packages/${ARCH}/kmods"
             mkdir -p "${DEST}"
-            cp "${TARGET_PKGS}"/*.apk "${DEST}/" 2>/dev/null || true
-            cp "${TARGET_PKGS}"/packages.adb "${DEST}/" 2>/dev/null || true
-            cp "${TARGET_PKGS}"/index.json "${DEST}/" 2>/dev/null || true
+            cp "${TARGET_BASE}/packages"/*.apk "${DEST}/" 2>/dev/null || true
+            cp "${TARGET_BASE}/packages"/packages.adb "${DEST}/" 2>/dev/null || true
+            cp "${TARGET_BASE}/packages"/index.json "${DEST}/" 2>/dev/null || true
           fi
 
           # Generate sha256sums for packages
@@ -318,12 +328,12 @@ jobs:
           echo "Total packages: $(find "${STAGING}/packages" -name '*.apk' | wc -l)"
 
           # Collect target metadata (profiles.json, buildinfo, etc.)
-          TARGET_DIR="${OPENWRT}/bin/targets/mediatek/filogic"
-          for f in profiles.json config.buildinfo feeds.buildinfo version.buildinfo sha256sums; do
-            [ -f "${TARGET_DIR}/${f}" ] && cp "${TARGET_DIR}/${f}" "${STAGING}/"
-          done
-          # Copy the device manifest if present
-          cp "${TARGET_DIR}"/*.manifest "${STAGING}/" 2>/dev/null || true
+          if [ -n "${TARGET_BASE}" ]; then
+            for f in profiles.json config.buildinfo feeds.buildinfo version.buildinfo sha256sums; do
+              [ -f "${TARGET_BASE}/${f}" ] && cp "${TARGET_BASE}/${f}" "${STAGING}/"
+            done
+            cp "${TARGET_BASE}"/*.manifest "${STAGING}/" 2>/dev/null || true
+          fi
 
           echo "Collected metadata:"
           ls -lh "${STAGING}"/*.json "${STAGING}"/*.buildinfo 2>/dev/null || true

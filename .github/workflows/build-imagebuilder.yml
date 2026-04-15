@@ -218,14 +218,15 @@ jobs:
           # imagebuilder container tag without custom patches.
           # Done after defconfig so it cannot be overridden by defaults.
           ASU_VER="${{ needs.discover.outputs.asu_version }}"
+          sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
           if [[ "$ASU_VER" != "SKIP" ]]; then
-            sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
             echo "CONFIG_VERSION_NUMBER=\"${ASU_VER}-SNAPSHOT\"" >> .config
-            sed -i '/^CONFIG_VERSION_REPO=/d' .config
-            echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
           else
-            echo "Test branch — keeping default version string"
+            # Test branch: use pesa branch name as version
+            echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.branch }}\"" >> .config
           fi
+          sed -i '/^CONFIG_VERSION_REPO=/d' .config
+          echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C

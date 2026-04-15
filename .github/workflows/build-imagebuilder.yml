@@ -9,6 +9,10 @@ on:
         description: "Force build a specific branch (leave empty for auto-discover)"
         required: false
         type: string
+      asu_version_override:
+        description: "Override ASU version (required for test branches, e.g. 4.618)"
+        required: false
+        type: string
       use_self_hosted:
         description: "Run build on self-hosted runner"
         required: true
@@ -32,6 +36,7 @@ jobs:
         id: discover
         env:
           FORCE_BRANCH: ${{ inputs.force_branch }}
+          ASU_VERSION_OVERRIDE: ${{ inputs.asu_version_override }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -51,9 +56,14 @@ jobs:
             echo "Force building branch: $FORCE_BRANCH"
             ASU_VER=$(derive_asu_version "$FORCE_BRANCH")
             if [[ "$ASU_VER" == "SKIP" ]]; then
-              echo "::warning::Test branch — skipping ASU version derivation"
-              echo "new_commits=false" >> "$GITHUB_OUTPUT"
-              exit 0
+              if [[ -n "${ASU_VERSION_OVERRIDE:-}" ]]; then
+                ASU_VER="$ASU_VERSION_OVERRIDE"
+                echo "Test branch — using override ASU version: $ASU_VER"
+              else
+                echo "::error::Test branch requires asu_version_override (e.g. 4.618)"
+                echo "new_commits=false" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
             fi
             LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${FORCE_BRANCH}" --jq .sha)
             echo "branch=${FORCE_BRANCH}" >> "$GITHUB_OUTPUT"

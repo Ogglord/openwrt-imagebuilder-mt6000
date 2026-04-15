@@ -108,4 +108,4 @@ Trigger a build for a specific branch via the Actions tab using "Run workflow" a
 ## Setup
 
 Add the following repository secret:
-- `HEALTHCHECK_BUILD_UUID`: Your healthcheck.io ping UUID for build monitoring
+- `HEALTHCHECK_BUILD_UUID`: Indicates if the github actions build fails or succeeds

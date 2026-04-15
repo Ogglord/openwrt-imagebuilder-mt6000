@@ -13,9 +13,14 @@ on:
         default: "glinet_gl-mt6000"
         type: string
       packages:
-        description: "Extra packages (space-separated, prefix with - to remove)"
+        description: "Base packages (space-separated)"
         required: false
         default: "luci luci-app-attendedsysupgrade"
+        type: string
+      extra_packages:
+        description: "Additional packages on top of base (space-separated)"
+        required: false
+        default: ""
         type: string
       asu_url:
         description: "ASU server URL"
@@ -36,8 +41,9 @@ jobs:
           VERSION="${{ inputs.branch }}-SNAPSHOT"
           ASU="${{ inputs.asu_url }}"
 
-          # Build packages JSON array from space-separated input
-          PACKAGES_JSON=$(echo '${{ inputs.packages }}' | tr ' ' '\n' | jq -R . | jq -sc .)
+          # Build packages JSON array from base + extra packages
+          ALL_PACKAGES="${{ inputs.packages }} ${{ inputs.extra_packages }}"
+          PACKAGES_JSON=$(echo "$ALL_PACKAGES" | tr -s ' ' '\n' | grep -v '^$' | jq -R . | jq -sc .)
 
           echo "Requesting build:"
           echo "  Version: $VERSION"

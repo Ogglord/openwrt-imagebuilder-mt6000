@@ -6,7 +6,7 @@
     "path_packages": "DEPRECATED",
     "package_changes": [],
     "targets": {
-      "mediatek/filogic": "next-r4.7.4.rss.mtk-SNAPSHOT"
+      "mediatek/filogic": "aarch64_cortex-a53"
     }
   },
   "next-r4.8.0.rss.mtk": {
@@ -16,7 +16,7 @@
     "path_packages": "DEPRECATED",
     "package_changes": [],
     "targets": {
-      "mediatek/filogic": "next-r4.8.0.rss.mtk-SNAPSHOT"
+      "mediatek/filogic": "aarch64_cortex-a53"
     }
   },
   "next-r4.8.0.rss.mtk-test6.18": {
@@ -26,7 +26,7 @@
     "path_packages": "DEPRECATED",
     "package_changes": [],
     "targets": {
-      "mediatek/filogic": "next-r4.8.0.rss.mtk-test6.18-SNAPSHOT"
+      "mediatek/filogic": "aarch64_cortex-a53"
     }
   }
 }

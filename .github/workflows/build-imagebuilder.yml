@@ -165,6 +165,12 @@ jobs:
           echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config
           make defconfig
+          # Set version to the branch name so firmware reports a specific version
+          # instead of "SNAPSHOT". This allows ASU to resolve the correct
+          # imagebuilder container tag without custom patches.
+          # Done after defconfig so it cannot be overridden by defaults.
+          sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
+          echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.branch }}\"" >> .config
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C

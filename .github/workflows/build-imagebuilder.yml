@@ -89,7 +89,7 @@ jobs:
       - name: Ping healthcheck start
         run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/start" || true
 
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Free disk space
         if: inputs.use_self_hosted == false
@@ -193,7 +193,9 @@ jobs:
           # imagebuilder container tag without custom patches.
           # Done after defconfig so it cannot be overridden by defaults.
           sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
-          echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.branch }}\"" >> .config
+          echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.branch }}-SNAPSHOT\"" >> .config
+          sed -i '/^CONFIG_VERSION_REPO=/d' .config
+          echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C
@@ -397,15 +399,33 @@ jobs:
           tar -czf "$GITHUB_WORKSPACE/packages-staging.tar.gz" \
             -C "${STAGING}" .
 
+      - name: Extract profiles.json from imagebuilder tarball
+        run: |
+          set -euo pipefail
+          TARBALL=$(ls "$GITHUB_WORKSPACE"/*imagebuilder*.tar.* | head -1)
+          echo "Extracting profiles.json from: $TARBALL"
+          mkdir -p "$GITHUB_WORKSPACE/profiles-json"
+          tar -xf "$TARBALL" --wildcards '*/targets/mediatek/filogic/profiles.json' \
+            --strip-components=4 -C "$GITHUB_WORKSPACE/profiles-json"
+          echo "Extracted profiles.json:"
+          ls -lh "$GITHUB_WORKSPACE/profiles-json/profiles.json"
+
+      - name: Upload profiles.json artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: profiles-json
+          path: profiles-json/profiles.json
+          retention-days: 1
+
       - name: Upload imagebuilder tarball as artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: imagebuilder-tarball
           path: "*imagebuilder*.tar.*"
           retention-days: 1
 
       - name: Upload packages artifact
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: packages-staging
           path: packages-staging.tar.gz
@@ -431,15 +451,15 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Download imagebuilder tarball
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: imagebuilder-tarball
 
       - name: Download packages artifact
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           name: packages-staging
 
@@ -516,6 +536,44 @@ jobs:
           **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
           **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/${TAG}/packages/" \
             packages-staging.tar.gz
+
+      - name: Download profiles.json artifact
+        uses: actions/download-artifact@v4
+        with:
+          name: profiles-json
+          path: profiles-json/
+
+      - name: Publish profiles.json to releases branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          VERSION="${{ needs.discover.outputs.branch }}-SNAPSHOT"
+          DEST_PATH="releases/${VERSION}/targets/mediatek/filogic/profiles.json"
+
+          echo "Publishing profiles.json to ${DEST_PATH} on releases branch..."
+
+          FILE_SHA=$(gh api "repos/${{ github.repository }}/contents/${DEST_PATH}?ref=releases" \
+            --jq '.sha' 2>/dev/null || echo '')
+
+          ENCODED=$(base64 -w0 < profiles-json/profiles.json)
+
+          if [[ -n "$FILE_SHA" ]]; then
+            gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
+              --method PUT \
+              --field message="ci: publish profiles.json for ${VERSION}" \
+              --field content="$ENCODED" \
+              --field sha="$FILE_SHA" \
+              --field branch="releases"
+          else
+            gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
+              --method PUT \
+              --field message="ci: publish profiles.json for ${VERSION}" \
+              --field content="$ENCODED" \
+              --field branch="releases"
+          fi
+
+          echo "profiles.json published to releases/${VERSION}/targets/mediatek/filogic/"
 
       - name: Ping healthcheck failure
         if: failure()

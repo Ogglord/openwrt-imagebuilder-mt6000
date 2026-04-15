@@ -56,46 +56,30 @@ jobs:
       - name: Build branch entry and metadata files
         run: |
           BRANCH_KEY="${{ matrix.branch_key }}"
-          TAG="mediatek-filogic-${BRANCH_KEY}"
-          TARGETS_BASE="https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/${TAG}"
-          PACKAGES_BASE="${TARGETS_BASE}/packages/aarch64_cortex-a53"
-
-          # Derive display name: strip "next-" prefix and ".rss.mtk" segment
-          # e.g. next-r4.8.0.rss.mtk-test6.18 → r4.8.0-test6.18
-          NAME=$(echo "$BRANCH_KEY" | sed 's/^next-//' | sed 's/\.rss\.mtk//')
+          VERSION="${BRANCH_KEY}-SNAPSHOT"
 
           mkdir -p output
 
-          # branches.json entry (for backward-compat / BRANCHES_URL consumers)
+          # branches.json entry (upstream ASU convention)
+          # Key = branch name (without -SNAPSHOT); ASU's get_branch() strips
+          # the -SNAPSHOT suffix from the firmware version to derive this key.
           jq -n \
             --arg key "$BRANCH_KEY" \
-            --arg name "$NAME" \
-            --arg path "targets/${TAG}" \
-            --arg pkgs_base "${PACKAGES_BASE}" \
+            --arg version "$VERSION" \
             '{
               ($key): {
-                name: $name,
                 enabled: true,
-                path: $path,
-                path_packages: ($pkgs_base + "/{feedname}"),
-                updates: "dev",
+                snapshot: true,
+                path: "releases/{version}",
+                path_packages: "DEPRECATED",
                 package_changes: [],
-                targets: {"mediatek/filogic": $key}
-              },
-              "SNAPSHOT": {
-                name: $name,
-                enabled: true,
-                path: $path,
-                path_packages: ($pkgs_base + "/{feedname}"),
-                updates: "dev",
-                package_changes: [],
-                targets: {"mediatek/filogic": $key}
+                targets: {"mediatek/filogic": $version}
               }
             }' > "output/entry-${BRANCH_KEY}.json"
 
           # .targets.json for upstream ASU compatibility
           # Consumed by ASU server to map target → imagebuilder tag
-          jq -n --arg key "$BRANCH_KEY" '{"mediatek/filogic": $key}' \
+          jq -n --arg version "$VERSION" '{"mediatek/filogic": $version}' \
             > "output/targets-${BRANCH_KEY}.json"
 
           echo "Branch entry:"
@@ -104,7 +88,7 @@ jobs:
           cat "output/targets-${BRANCH_KEY}.json"
 
       - name: Upload branch artifacts
-        uses: actions/upload-artifact@v7
+        uses: actions/upload-artifact@v4
         with:
           name: branch-entry-${{ matrix.branch_key }}
           path: output/
@@ -116,10 +100,10 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v4
 
       - name: Download all branch entries
-        uses: actions/download-artifact@v8
+        uses: actions/download-artifact@v4
         with:
           pattern: branch-entry-*
           path: entries/
@@ -145,21 +129,19 @@ jobs:
       - name: Generate .versions.json
         if: steps.merge.outputs.skip != 'true'
         run: |
-          # All versioned keys (non-SNAPSHOT), sorted newest first
-          VERSIONS=$(jq -r 'keys[] | select(. != "SNAPSHOT")' branches.json | sort -rV)
-          LATEST=$(echo "$VERSIONS" | head -1)
-          OLDSTABLE=$(echo "$VERSIONS" | sed -n '2p')
+          # Build version list: each branch key gets a -SNAPSHOT version
+          VERSIONS=$(jq -r 'keys[]' branches.json | sort -rV | while read -r KEY; do echo "${KEY}-SNAPSHOT"; done)
+          LATEST=$(jq -r 'keys | sort | last' branches.json)
           VERSIONS_JSON=$(echo "$VERSIONS" | jq -R . | jq -sc .)
 
           jq -n \
-            --arg upcoming "$LATEST" \
-            --arg stable "$LATEST" \
-            --arg oldstable "${OLDSTABLE:-}" \
+            --arg upcoming "${LATEST}-SNAPSHOT" \
+            --arg stable "${LATEST}-SNAPSHOT" \
             --argjson versions_list "$VERSIONS_JSON" \
             '{
               upcoming_version: $upcoming,
               stable_version: $stable,
-              oldstable_version: $oldstable,
+              oldstable_version: "",
               versions_list: $versions_list
             }' > .versions.json
 
@@ -238,8 +220,8 @@ jobs:
         run: |
           for targets_file in entries/targets-*.json; do
             BRANCH_KEY=$(basename "$targets_file" | sed 's/^targets-//' | sed 's/\.json$//')
-            TAG="mediatek-filogic-${BRANCH_KEY}"
-            DEST_PATH="targets/${TAG}/.targets.json"
+            VERSION="${BRANCH_KEY}-SNAPSHOT"
+            DEST_PATH="releases/${VERSION}/.targets.json"
 
             echo "Pushing ${DEST_PATH}..."
 
@@ -251,14 +233,14 @@ jobs:
             if [[ -n "$FILE_SHA" ]]; then
               gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
                 --method PUT \
-                --field message="ci: publish .targets.json for ${TAG}" \
+                --field message="ci: publish .targets.json for ${VERSION}" \
                 --field content="$ENCODED" \
                 --field sha="$FILE_SHA" \
                 --field branch="releases"
             else
               gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
                 --method PUT \
-                --field message="ci: publish .targets.json for ${TAG}" \
+                --field message="ci: publish .targets.json for ${VERSION}" \
                 --field content="$ENCODED" \
                 --field branch="releases"
             fi

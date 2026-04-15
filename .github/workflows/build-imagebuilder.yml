@@ -218,38 +218,51 @@ jobs:
           echo "Signing key injected, public key embedded in firmware at files/etc/apk/keys/"
 
       - name: Pre-fetch linux-firmware via git-lfs
+        working-directory: ${{ runner.temp }}/openwrt
+        env:
+          FORCE_UNSAFE_CONFIGURE: 1
+          LC_ALL: C
         run: |
           # pesa1234/linux-firmware uses git-lfs for binary blobs. OpenWrt's
           # download fallback uses `git archive` which omits LFS content,
           # producing a broken tarball. We clone with LFS here and create the
           # tarball in the exact format OpenWrt expects in dl/.
-          #
-          # For PKG_SOURCE_PROTO:=git packages, OpenWrt defaults to:
-          #   PKG_SOURCE = $(PKG_NAME)-$(PKG_VERSION).tar.xz
-          # and verifies against PKG_MIRROR_HASH.
-          PACKAGE_MK="${{ runner.temp }}/openwrt/package/firmware/linux-firmware/Makefile"
+          PACKAGE_MK="package/firmware/linux-firmware/Makefile"
           if [ ! -f "$PACKAGE_MK" ]; then
             echo "Package makefile not found, skipping pre-fetch"
             exit 0
           fi
-          VERSION=$(grep -E '^PKG_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
-          PKG_COMMIT=$(grep -E '^PKG_SOURCE_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
-          MIRROR_HASH=$(grep -E '^PKG_MIRROR_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
-          # Check if PKG_SOURCE is explicitly set, otherwise use the default for git sources
-          EXPLICIT_SOURCE=$(grep -E '^PKG_SOURCE:?=' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
-          SOURCE="${EXPLICIT_SOURCE:-linux-firmware-${VERSION}.tar.xz}"
+
+          # Ask the build system for the resolved values instead of grepping
+          SOURCE=$(make --no-print-directory -C package/firmware/linux-firmware val.PKG_SOURCE V=s 2>/dev/null || true)
+          VERSION=$(make --no-print-directory -C package/firmware/linux-firmware val.PKG_VERSION V=s 2>/dev/null || true)
+          PKG_COMMIT=$(make --no-print-directory -C package/firmware/linux-firmware val.PKG_SOURCE_VERSION V=s 2>/dev/null || true)
+          MIRROR_HASH=$(make --no-print-directory -C package/firmware/linux-firmware val.PKG_MIRROR_HASH V=s 2>/dev/null || true)
+
+          # Fall back to grepping if make val.* doesn't work in this fork
+          if [ -z "$SOURCE" ]; then
+            VERSION=$(grep -E '^PKG_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+            PKG_COMMIT=$(grep -E '^PKG_SOURCE_VERSION' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+            MIRROR_HASH=$(grep -E '^PKG_MIRROR_HASH' "$PACKAGE_MK" | head -1 | cut -d= -f2 | tr -d ' ')
+            SOURCE="linux-firmware-${VERSION}.tar.xz"
+          fi
+
           if [[ -z "$VERSION" || -z "$PKG_COMMIT" ]]; then
-            echo "Could not parse VERSION or PKG_SOURCE_VERSION from $PACKAGE_MK — skipping pre-fetch"
-            cat "$PACKAGE_MK"
+            echo "Could not parse VERSION or PKG_SOURCE_VERSION — skipping pre-fetch"
             exit 0
           fi
+
           DL_DIR="${{ runner.temp }}/openwrt/dl"
           mkdir -p "$DL_DIR"
           if [ -f "$DL_DIR/$SOURCE" ]; then
             echo "Already present in dl/: $SOURCE"
             exit 0
           fi
-          echo "Source: $SOURCE (mirror hash: ${MIRROR_HASH:-none})"
+
+          echo "Source: $SOURCE"
+          echo "Version: $VERSION  Commit: $PKG_COMMIT"
+          echo "Mirror hash: ${MIRROR_HASH:-none}"
+
           echo "Cloning pesa1234/linux-firmware at $PKG_COMMIT with LFS..."
           git clone --filter=blob:none https://github.com/pesa1234/linux-firmware.git "${{ runner.temp }}/linux-firmware-src"
           cd "${{ runner.temp }}/linux-firmware-src"
@@ -261,24 +274,25 @@ jobs:
           mkdir -p "$SUBDIR"
           cp -a linux-firmware-src/. "$SUBDIR/"
           rm -rf "$SUBDIR/.git" "$SUBDIR/.gitmodules"
-          # Create tarball matching the expected filename extension
+
+          # Create tarball with deterministic flags, matching the expected extension
+          TAR_FLAGS="--numeric-owner --owner=0 --group=0 --mode=a-s --sort=name --mtime=$TAR_TIMESTAMP"
           case "$SOURCE" in
-            *.tar.xz)  tar --numeric-owner --owner=0 --group=0 --mode=a-s --sort=name \
-                          --mtime="$TAR_TIMESTAMP" -cJf "$DL_DIR/$SOURCE" "$SUBDIR" ;;
-            *.tar.zst) tar --numeric-owner --owner=0 --group=0 --mode=a-s --sort=name \
-                          --mtime="$TAR_TIMESTAMP" -c "$SUBDIR" | \
-                          zstd -T0 --ultra -20 -c > "$DL_DIR/$SOURCE" ;;
-            *.tar.gz)  tar --numeric-owner --owner=0 --group=0 --mode=a-s --sort=name \
-                          --mtime="$TAR_TIMESTAMP" -czf "$DL_DIR/$SOURCE" "$SUBDIR" ;;
-            *)         echo "Unknown extension for $SOURCE"; exit 1 ;;
+            *.tar.xz)  tar $TAR_FLAGS -cJf "$DL_DIR/$SOURCE" "$SUBDIR" ;;
+            *.tar.zst) tar $TAR_FLAGS -c "$SUBDIR" | zstd -T0 -19 -c > "$DL_DIR/$SOURCE" ;;
+            *.tar.gz)  tar $TAR_FLAGS -czf "$DL_DIR/$SOURCE" "$SUBDIR" ;;
+            *.tar.bz2) tar $TAR_FLAGS -cjf "$DL_DIR/$SOURCE" "$SUBDIR" ;;
+            *)         echo "Unknown archive format: $SOURCE"; exit 1 ;;
           esac
           rm -rf "$SUBDIR" linux-firmware-src
+
           ACTUAL_HASH=$(sha256sum "$DL_DIR/$SOURCE" | cut -d' ' -f1)
           echo "Created $SOURCE (sha256: $ACTUAL_HASH)"
           if [ -n "$MIRROR_HASH" ] && [ "$ACTUAL_HASH" != "$MIRROR_HASH" ]; then
             echo "Hash differs from PKG_MIRROR_HASH — patching Makefile so make"
             echo "download accepts our tarball (which has correct LFS content)."
-            sed -i "s/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=${ACTUAL_HASH}/" "$PACKAGE_MK"
+            sed -i "s/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=${ACTUAL_HASH}/" \
+              "${{ runner.temp }}/openwrt/$PACKAGE_MK"
             echo "Patched PKG_MIRROR_HASH to $ACTUAL_HASH"
           fi
 

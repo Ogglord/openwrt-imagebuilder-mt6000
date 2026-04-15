@@ -89,7 +89,7 @@ jobs:
       - name: Ping healthcheck start
         run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/start" || true
 
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Free disk space
         if: inputs.use_self_hosted == false
@@ -343,14 +343,14 @@ jobs:
             -C "${STAGING}" .
 
       - name: Upload imagebuilder tarball as artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: imagebuilder-tarball
           path: "*imagebuilder*.tar.*"
           retention-days: 1
 
       - name: Upload packages artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: packages-staging
           path: packages-staging.tar.gz
@@ -376,15 +376,15 @@ jobs:
       packages: write
 
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
 
       - name: Download imagebuilder tarball
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: imagebuilder-tarball
 
       - name: Download packages artifact
-        uses: actions/download-artifact@v4
+        uses: actions/download-artifact@v8
         with:
           name: packages-staging
 

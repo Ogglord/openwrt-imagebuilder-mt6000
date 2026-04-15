@@ -444,7 +444,16 @@ jobs:
           retention-days: 1
 
       - name: Cleanup openwrt build dir
-        run: rm -rf ${{ runner.temp }}/openwrt
+        run: |
+          # Preserve dl/ for actions/cache post-step, remove everything else
+          if [ -d "${{ runner.temp }}/openwrt/dl" ] && [ ! -L "${{ runner.temp }}/openwrt/dl" ]; then
+            mv "${{ runner.temp }}/openwrt/dl" "${{ runner.temp }}/openwrt-dl-cache"
+          fi
+          rm -rf ${{ runner.temp }}/openwrt
+          if [ -d "${{ runner.temp }}/openwrt-dl-cache" ]; then
+            mkdir -p ${{ runner.temp }}/openwrt
+            mv "${{ runner.temp }}/openwrt-dl-cache" "${{ runner.temp }}/openwrt/dl"
+          fi
 
       - name: Ping healthcheck failure with log
         if: failure()

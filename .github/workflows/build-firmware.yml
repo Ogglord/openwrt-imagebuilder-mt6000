@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       branch:
-        description: "Pesa branch (e.g. next-r4.8.0.rss.mtk-test6.18)"
+        description: "ASU version (e.g. 4.8) or pesa branch (e.g. next-r4.8.0.rss.mtk)"
         required: true
         type: string
       profile:
@@ -38,8 +38,19 @@ jobs:
         run: |
           set -euo pipefail
 
-          VERSION="${{ inputs.branch }}-SNAPSHOT"
+          INPUT="${{ inputs.branch }}"
           ASU="${{ inputs.asu_url }}"
+
+          # Accept both pesa branch names and ASU X.Y versions
+          if [[ "$INPUT" == next-r* ]]; then
+            # Pesa branch: derive X.Y
+            VERSION="$(echo "$INPUT" | sed 's/^next-r//' | cut -d. -f1,2)-SNAPSHOT"
+          elif [[ "$INPUT" =~ ^[0-9]+\.[0-9]+$ ]]; then
+            # Already X.Y format
+            VERSION="${INPUT}-SNAPSHOT"
+          else
+            VERSION="${INPUT}-SNAPSHOT"
+          fi
 
           # Build packages JSON array from base + extra packages
           ALL_PACKAGES="${{ inputs.packages }} ${{ inputs.extra_packages }}"

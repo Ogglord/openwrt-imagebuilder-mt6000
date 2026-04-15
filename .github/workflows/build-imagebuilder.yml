@@ -24,6 +24,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       branch: ${{ steps.discover.outputs.branch }}
+      asu_version: ${{ steps.discover.outputs.asu_version }}
       commit_sha: ${{ steps.discover.outputs.commit_sha }}
       new_commits: ${{ steps.discover.outputs.new_commits }}
     steps:
@@ -35,10 +36,28 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Derive ASU X.Y version from pesa branch name
+          # next-r4.7.4.rss.mtk → 4.7, next-r4.8.0.rss.mtk → 4.8
+          derive_asu_version() {
+            local branch="$1"
+            if [[ "$branch" == *"-test"* ]]; then
+              echo "SKIP"  # test branches handled manually
+              return
+            fi
+            echo "$branch" | sed 's/^next-r//' | cut -d. -f1,2
+          }
+
           if [[ -n "${FORCE_BRANCH:-}" ]]; then
             echo "Force building branch: $FORCE_BRANCH"
+            ASU_VER=$(derive_asu_version "$FORCE_BRANCH")
+            if [[ "$ASU_VER" == "SKIP" ]]; then
+              echo "::warning::Test branch — skipping ASU version derivation"
+              echo "new_commits=false" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
             LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${FORCE_BRANCH}" --jq .sha)
             echo "branch=${FORCE_BRANCH}" >> "$GITHUB_OUTPUT"
+            echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
             echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
             echo "new_commits=true" >> "$GITHUB_OUTPUT"
             exit 0
@@ -75,7 +94,15 @@ jobs:
             echo "new_commits=true" >> "$GITHUB_OUTPUT"
           fi
 
+          ASU_VER=$(derive_asu_version "$LATEST_BRANCH")
+          if [[ "$ASU_VER" == "SKIP" ]]; then
+            echo "::warning::Latest branch is a test branch ($LATEST_BRANCH) — skipping"
+            echo "new_commits=false" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
           echo "branch=${LATEST_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
           echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
 
 
@@ -193,7 +220,7 @@ jobs:
           # imagebuilder container tag without custom patches.
           # Done after defconfig so it cannot be overridden by defaults.
           sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
-          echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.branch }}-SNAPSHOT\"" >> .config
+          echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.asu_version }}-SNAPSHOT\"" >> .config
           sed -i '/^CONFIG_VERSION_REPO=/d' .config
           echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
         env:
@@ -541,7 +568,7 @@ jobs:
             PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/mediatek-filogic-${{ needs.discover.outputs.branch }}/packages/aarch64_cortex-a53
           tags: |
             ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}
-            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${{ needs.discover.outputs.branch }}
+            ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${{ needs.discover.outputs.asu_version }}
 
       - name: Create release to record built commit
         env:
@@ -569,7 +596,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          VERSION="${{ needs.discover.outputs.branch }}-SNAPSHOT"
+          VERSION="${{ needs.discover.outputs.asu_version }}-SNAPSHOT"
           DEST_PATH="releases/${VERSION}/targets/mediatek/filogic/profiles.json"
 
           echo "Publishing profiles.json to ${DEST_PATH} on releases branch..."

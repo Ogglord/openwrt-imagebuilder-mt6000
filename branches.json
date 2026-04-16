@@ -1,9 +1,9 @@
 {
   "4.7": {
     "name": "r4.7.4.rss.mtk",
-    "enabled": true,
+    "enabled": false,
     "snapshot": true,
-    "path": "releases/{version}",
+    "path": "{version}",
     "path_packages": "DEPRECATED",
     "package_changes": [],
     "targets": {
@@ -14,7 +14,7 @@
     "name": "r4.8.0.rss.mtk",
     "enabled": true,
     "snapshot": true,
-    "path": "releases/{version}",
+    "path": "{version}",
     "path_packages": "DEPRECATED",
     "package_changes": [],
     "targets": {

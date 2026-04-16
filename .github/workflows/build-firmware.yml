@@ -1,4 +1,4 @@
-name: Build Firmware via ASU
+name: Trigger Firmware Build
 
 on:
   workflow_dispatch:

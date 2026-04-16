@@ -491,7 +491,7 @@ jobs:
 
   containerize:
     needs: [discover, build]
-    runs-on: ubuntu-latest
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 30
     permissions:
       contents: write

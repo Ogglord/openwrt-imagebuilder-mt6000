@@ -9,11 +9,15 @@ on:
         description: "Force build a specific branch (leave empty for auto-discover)"
         required: false
         type: string
-      use_self_hosted:
-        description: "Run build on self-hosted runner"
+      runner:
+        description: "Runner to use for the build job"
         required: true
-        default: false
-        type: boolean
+        type: choice
+        default: ubuntu-latest
+        options:
+          - ubuntu-latest
+          - build-unraid
+          - build-smospab
 
 env:
   REGISTRY: ghcr.io
@@ -107,7 +111,7 @@ jobs:
   build:
     needs: discover
     if: needs.discover.outputs.new_commits == 'true'
-    runs-on: "${{ inputs.use_self_hosted == true && 'self-hosted' || 'ubuntu-latest' }}"
+    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 360
 
     steps:
@@ -117,7 +121,7 @@ jobs:
       - uses: actions/checkout@v5
 
       - name: Free disk space
-        if: inputs.use_self_hosted == false
+        if: inputs.runner == 'ubuntu-latest' || inputs.runner == ''
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -129,7 +133,7 @@ jobs:
           swap-storage: true
 
       - name: Install build dependencies
-        if: inputs.use_self_hosted == false
+        if: inputs.runner == 'ubuntu-latest' || inputs.runner == ''
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -140,7 +144,7 @@ jobs:
           sudo apt-get autoremove -y && sudo apt-get clean -y
 
       - name: Clean previous build
-        if: inputs.use_self_hosted == true
+        if: inputs.runner != 'ubuntu-latest' && inputs.runner != ''
         run: rm -rf ${{ runner.temp }}/openwrt
 
       - name: Clone OpenWrt source
@@ -150,7 +154,7 @@ jobs:
 
       - name: Cache dl/ directory
         run: |
-          if [[ "${{ inputs.use_self_hosted }}" == "true" ]]; then
+          if [[ "${{ inputs.runner }}" != "ubuntu-latest" && -n "${{ inputs.runner }}" ]]; then
             # Self-hosted: use a persistent local directory (no network overhead)
             mkdir -p "$HOME/.cache/openwrt-dl"
             ln -sf "$HOME/.cache/openwrt-dl" "${{ runner.temp }}/openwrt/dl"
@@ -162,7 +166,7 @@ jobs:
           fi
 
       - name: Restore dl/ cache (GitHub-hosted)
-        if: inputs.use_self_hosted != true
+        if: inputs.runner == 'ubuntu-latest' || inputs.runner == ''
         uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/openwrt/dl

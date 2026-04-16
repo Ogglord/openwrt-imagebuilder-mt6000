@@ -1,4 +1,5 @@
 name: Build ImageBuilder Containers
+run-name: "Build ImageBuilder — ${{ inputs.force_branch || 'auto-discover' }} on ${{ inputs.runner || 'ubuntu-latest' }}"
 
 on:
   schedule:
@@ -109,6 +110,7 @@ jobs:
 
 
   build:
+    name: build (${{ needs.discover.outputs.branch }})
     needs: discover
     if: needs.discover.outputs.new_commits == 'true'
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}

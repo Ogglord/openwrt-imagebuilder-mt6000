@@ -222,8 +222,6 @@ jobs:
 
       - name: Download and apply config
         working-directory: ${{ runner.temp }}/openwrt
-        env:
-          RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
         run: |
           # Use the *resolved* config.buildinfo from pesa's release directory
           # instead of the pre-build config_file/.config template. This is the
@@ -266,6 +264,7 @@ jobs:
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C
+          RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
 
       - name: Inject APK signing key
         working-directory: ${{ runner.temp }}/openwrt

@@ -15,7 +15,7 @@ on:
       packages:
         description: "Base packages (space-separated)"
         required: false
-        default: "luci luci-app-attendedsysupgrade"
+        default: ""
         type: string
       extra_packages:
         description: "Additional packages on top of base (space-separated)"

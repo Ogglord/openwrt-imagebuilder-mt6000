@@ -1,7 +1,7 @@
 {
   "4.7": {
     "name": "r4.7.4.rss.mtk",
-    "enabled": false,
+    "enabled": true,
     "snapshot": true,
     "path": "{version}",
     "path_packages": "DEPRECATED",

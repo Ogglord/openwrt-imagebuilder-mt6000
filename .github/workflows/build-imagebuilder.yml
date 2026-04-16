@@ -386,19 +386,30 @@ jobs:
           set -euo pipefail
           OPENWRT="${{ runner.temp }}/openwrt"
           ARCH="aarch64_cortex-a53"
+          TARGET="mediatek/filogic"
           STAGING="${{ runner.temp }}/pkg-staging"
 
-          # pesa1234's fork nests bin/ output under a dated subdirectory,
-          # so discover paths dynamically instead of hardcoding.
+          # Staging layout matches the ASU-expected on-disk structure under
+          # releases/{version}/ so the publish step is a plain rsync into
+          # the releases branch:
+          #
+          #   packages/${ARCH}/feeds.conf                — feed name list
+          #   packages/${ARCH}/{feed}/{index.json,*.apk} — per-feed APK feed
+          #   targets/${TARGET}/{profiles.json,*.manifest,*.buildinfo,sha256sums}
+          #   targets/${TARGET}/packages/{index.json,*.apk}  — target kmods
+          #
+          # ASU fetches packages from {upstream_url}/{path}/packages/{arch}/... and
+          # target kmods from {upstream_url}/{path}/targets/{target}/packages/ —
+          # where {path} is "releases/{version}" per branches.json.
           PKG_BASE=$(find "${OPENWRT}/bin" -type d -path "*packages/${ARCH}" | head -1)
-          TARGET_BASE=$(find "${OPENWRT}/bin" -type d -path "*targets/mediatek/filogic" | head -1)
+          TARGET_BASE=$(find "${OPENWRT}/bin" -type d -path "*targets/${TARGET}" | head -1)
 
           echo "Packages base: ${PKG_BASE:-NOT FOUND}"
           echo "Targets base: ${TARGET_BASE:-NOT FOUND}"
 
-          mkdir -p "${STAGING}/packages/${ARCH}"
+          mkdir -p "${STAGING}/packages/${ARCH}" "${STAGING}/targets/${TARGET}/packages"
 
-          # Copy feed packages as-is (already signed with our key by make)
+          # Arch-wide feed packages (base, luci, packages, routing, etc.)
           if [ -n "${PKG_BASE}" ]; then
             for FEED_DIR in "${PKG_BASE}"/*/; do
               [ -d "${FEED_DIR}" ] || continue
@@ -411,21 +422,48 @@ jobs:
             done
           fi
 
-          # Collect target packages (kmods)
+          # feeds.conf tells ASU which feeds to enumerate. Format: opkg-style
+          # three-column lines — ASU's parse_feeds_conf splits on whitespace
+          # and takes the second column, so only the feed name matters.
+          FEEDS_CONF="${STAGING}/packages/${ARCH}/feeds.conf"
+          : > "${FEEDS_CONF}"
+          for FEED_DIR in "${STAGING}/packages/${ARCH}"/*/; do
+            [ -d "${FEED_DIR}" ] || continue
+            FEED=$(basename "${FEED_DIR}")
+            echo "src/apk ${FEED} ignored" >> "${FEEDS_CONF}"
+          done
+          echo "Generated feeds.conf:"
+          cat "${FEEDS_CONF}"
+
+          # Target kmods live under targets/${TARGET}/packages/ — ASU reads
+          # them from there, not from packages/${ARCH}/kmods.
           if [ -n "${TARGET_BASE}" ] && [ -d "${TARGET_BASE}/packages" ]; then
-            DEST="${STAGING}/packages/${ARCH}/kmods"
-            mkdir -p "${DEST}"
+            DEST="${STAGING}/targets/${TARGET}/packages"
             cp "${TARGET_BASE}/packages"/*.apk "${DEST}/" 2>/dev/null || true
             cp "${TARGET_BASE}/packages"/packages.adb "${DEST}/" 2>/dev/null || true
             cp "${TARGET_BASE}/packages"/index.json "${DEST}/" 2>/dev/null || true
           fi
 
-          # Generate sha256sums for packages
+          # Target metadata (profiles.json, buildinfo, manifests) sits alongside
+          # the target's packages/ dir.
+          if [ -n "${TARGET_BASE}" ]; then
+            DEST="${STAGING}/targets/${TARGET}"
+            for f in profiles.json config.buildinfo feeds.buildinfo version.buildinfo; do
+              [ -f "${TARGET_BASE}/${f}" ] && cp "${TARGET_BASE}/${f}" "${DEST}/"
+            done
+            cp "${TARGET_BASE}"/*.manifest "${DEST}/" 2>/dev/null || true
+          fi
+
+          # sha256sums per package dir — not strictly required by ASU but useful
+          # for debugging and mirror integrity checks.
           (cd "${STAGING}/packages/${ARCH}" && \
             find . -name '*.apk' -o -name 'packages.adb' -o -name 'index.json' | \
-            sort | xargs sha256sum > sha256sums)
+            sort | xargs sha256sum > sha256sums) 2>/dev/null || true
+          (cd "${STAGING}/targets/${TARGET}/packages" && \
+            find . -name '*.apk' -o -name 'packages.adb' -o -name 'index.json' | \
+            sort | xargs sha256sum > sha256sums) 2>/dev/null || true
 
-          PKG_COUNT=$(find "${STAGING}/packages" -name '*.apk' | wc -l)
+          PKG_COUNT=$(find "${STAGING}" -name '*.apk' | wc -l)
           echo "Total packages: ${PKG_COUNT}"
           if [ "${PKG_COUNT}" -eq 0 ]; then
             echo "::error::No packages found — check build output structure"
@@ -433,16 +471,8 @@ jobs:
             exit 1
           fi
 
-          # Collect target metadata (profiles.json, buildinfo, etc.)
-          if [ -n "${TARGET_BASE}" ]; then
-            for f in profiles.json config.buildinfo feeds.buildinfo version.buildinfo sha256sums; do
-              [ -f "${TARGET_BASE}/${f}" ] && cp "${TARGET_BASE}/${f}" "${STAGING}/"
-            done
-            cp "${TARGET_BASE}"/*.manifest "${STAGING}/" 2>/dev/null || true
-          fi
-
-          echo "Collected metadata:"
-          ls -lh "${STAGING}"/*.json "${STAGING}"/*.buildinfo 2>/dev/null || true
+          echo "Staging layout:"
+          find "${STAGING}" -maxdepth 4 -type d | sort
 
           # Bundle for artifact handoff to containerize job
           tar -czf "$GITHUB_WORKSPACE/packages-staging.tar.gz" \
@@ -452,7 +482,7 @@ jobs:
         uses: actions/upload-artifact@v5
         with:
           name: profiles-json
-          path: ${{ runner.temp }}/pkg-staging/profiles.json
+          path: ${{ runner.temp }}/pkg-staging/targets/mediatek/filogic/profiles.json
           retention-days: 1
 
       - name: Upload imagebuilder tarball as artifact
@@ -511,11 +541,12 @@ jobs:
           name: packages-staging
 
       - name: Publish packages and metadata to releases branch
+        if: needs.discover.outputs.asu_version != 'SKIP'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          TAG="mediatek-filogic-${{ needs.discover.outputs.branch }}"
+          VERSION="${{ needs.discover.outputs.asu_version }}-SNAPSHOT"
 
           rm -rf /tmp/pkg-staging /tmp/releases-branch
           mkdir -p /tmp/pkg-staging
@@ -525,21 +556,19 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
             /tmp/releases-branch
 
-          # Replace build output for this tag (idempotent on re-run)
-          rm -rf "/tmp/releases-branch/targets/${TAG}"
-          mkdir -p "/tmp/releases-branch/targets/${TAG}"
-          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/targets/${TAG}/"
-
-          # Prune: keep only the 3 most recent tag directories
-          cd /tmp/releases-branch/targets
-          ls -t | tail -n +4 | xargs -r rm -rf
+          # Publish under releases/{version}/ — the path branches.json
+          # tells ASU to consume. Wipe first so stale files don't linger
+          # across rebuilds.
+          rm -rf "/tmp/releases-branch/releases/${VERSION}"
+          mkdir -p "/tmp/releases-branch/releases/${VERSION}"
+          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/releases/${VERSION}/"
 
           cd /tmp/releases-branch
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add targets/
+          git add releases/
           git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "ci: publish packages and metadata for ${TAG}"
+          git commit -m "ci: publish packages and metadata for ${VERSION}"
 
           for i in 1 2 3; do
             git push origin releases && break
@@ -575,7 +604,7 @@ jobs:
           file: ./Containerfile
           push: true
           build-args: |
-            PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/mediatek-filogic-${{ needs.discover.outputs.branch }}/packages/aarch64_cortex-a53
+            PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/releases/${{ needs.discover.outputs.asu_version }}-SNAPSHOT/packages/aarch64_cortex-a53
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -586,54 +615,20 @@ jobs:
         run: |
           TAG="mediatek-filogic-${{ needs.discover.outputs.branch }}"
           gh release delete "${TAG}" --cleanup-tag -y --repo "${{ github.repository }}" 2>/dev/null || true
+          VERSION="${{ needs.discover.outputs.asu_version }}-SNAPSHOT"
           gh release create "${TAG}" \
             --repo "${{ github.repository }}" \
             --title "ImageBuilder: ${{ needs.discover.outputs.branch }}" \
             --notes "**Branch:** ${{ needs.discover.outputs.branch }}
           **Commit:** ${{ needs.discover.outputs.commit_sha }}
+          **Version:** ${VERSION}
           **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
-          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/${TAG}/packages/" \
+          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/releases/${VERSION}/packages/" \
             packages-staging.tar.gz
 
-      - name: Download profiles.json artifact
-        if: needs.discover.outputs.asu_version != 'SKIP'
-        uses: actions/download-artifact@v5
-        with:
-          name: profiles-json
-          path: profiles-json/
-
-      - name: Publish profiles.json to releases branch
-        if: needs.discover.outputs.asu_version != 'SKIP'
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          VERSION="${{ needs.discover.outputs.asu_version }}-SNAPSHOT"
-          DEST_PATH="releases/${VERSION}/targets/mediatek/filogic/profiles.json"
-
-          echo "Publishing profiles.json to ${DEST_PATH} on releases branch..."
-
-          FILE_SHA=$(gh api "repos/${{ github.repository }}/contents/${DEST_PATH}?ref=releases" \
-            --jq '.sha' 2>/dev/null || echo '')
-
-          ENCODED=$(base64 -w0 < profiles-json/profiles.json)
-
-          if [[ -n "$FILE_SHA" ]]; then
-            gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
-              --method PUT \
-              --field message="ci: publish profiles.json for ${VERSION}" \
-              --field content="$ENCODED" \
-              --field sha="$FILE_SHA" \
-              --field branch="releases"
-          else
-            gh api "repos/${{ github.repository }}/contents/${DEST_PATH}" \
-              --method PUT \
-              --field message="ci: publish profiles.json for ${VERSION}" \
-              --field content="$ENCODED" \
-              --field branch="releases"
-          fi
-
-          echo "profiles.json published to releases/${VERSION}/targets/mediatek/filogic/"
+      # profiles.json is already included in the git-based publish above
+      # (staged under releases/{version}/targets/mediatek/filogic/) so no
+      # separate API PUT is needed.
 
       - name: Ping healthcheck failure
         if: failure()

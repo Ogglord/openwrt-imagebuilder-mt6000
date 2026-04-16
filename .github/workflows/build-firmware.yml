@@ -20,7 +20,7 @@ on:
       extra_packages:
         description: "Additional packages on top of base (space-separated)"
         required: false
-        default: ""
+        default: "nano bash tailscale luci-app-tailscale-community luci-app-sqm sqm-scripts luci-app-attendedsysupgrade"
         type: string
       asu_url:
         description: "ASU server URL"

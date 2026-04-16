@@ -442,22 +442,11 @@ jobs:
           tar -czf "$GITHUB_WORKSPACE/packages-staging.tar.gz" \
             -C "${STAGING}" .
 
-      - name: Extract profiles.json from imagebuilder tarball
-        run: |
-          set -euo pipefail
-          TARBALL=$(ls "$GITHUB_WORKSPACE"/*imagebuilder*.tar.* | head -1)
-          echo "Extracting profiles.json from: $TARBALL"
-          mkdir -p "$GITHUB_WORKSPACE/profiles-json"
-          tar -xf "$TARBALL" --wildcards '*/targets/mediatek/filogic/profiles.json' \
-            --strip-components=4 -C "$GITHUB_WORKSPACE/profiles-json"
-          echo "Extracted profiles.json:"
-          ls -lh "$GITHUB_WORKSPACE/profiles-json/profiles.json"
-
       - name: Upload profiles.json artifact
         uses: actions/upload-artifact@v5
         with:
           name: profiles-json
-          path: profiles-json/profiles.json
+          path: ${{ runner.temp }}/pkg-staging/profiles.json
           retention-days: 1
 
       - name: Upload imagebuilder tarball as artifact

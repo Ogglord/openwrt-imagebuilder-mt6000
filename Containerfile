@@ -25,7 +25,24 @@ RUN mkdir -p /builder && \
     sed -i \
       -e 's/CONFIG_DEFAULT_libustream-mbedtls=y/CONFIG_DEFAULT_libustream-openssl=y/' \
       -e 's/CONFIG_DEFAULT_wpad-basic-mbedtls=y/CONFIG_DEFAULT_wpad-openssl=y/' \
-      /builder/.config && \
+      /builder/.config
+
+# Bake pesa's manifest into DEFAULT_PACKAGES so `make image` with no
+# PACKAGES= argument produces pesa-parity firmware (LuCI + all kmods + the
+# full default set). Without this, SNAPSHOT ImageBuilder ships near-bare
+# rootfs and clients must enumerate every package explicitly. The CI's
+# containerize job generates this file from the matching release's .manifest,
+# so it is in lockstep with the config.buildinfo and package repo we ship.
+COPY firmware-packages.txt /tmp/firmware-packages.txt
+RUN if [ -s /tmp/firmware-packages.txt ]; then \
+      PKGS=$(tr '\n' ' ' < /tmp/firmware-packages.txt); \
+      printf '\n# --- pesa manifest baked in at container build time ---\nDEFAULT_PACKAGES += %s\n' "$PKGS" \
+        >> /builder/include/default-packages.mk; \
+      echo "Baked $(wc -l < /tmp/firmware-packages.txt) packages into DEFAULT_PACKAGES"; \
+    else \
+      echo "WARNING: firmware-packages.txt is empty — skipping DEFAULT_PACKAGES injection"; \
+    fi && \
+    rm -f /tmp/firmware-packages.txt && \
     chown -R buildbot:buildbot /builder
 
 # Patch APK repositories to point to our signed package feed so firmware

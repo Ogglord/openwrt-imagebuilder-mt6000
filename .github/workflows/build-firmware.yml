@@ -13,12 +13,12 @@ on:
         default: "glinet_gl-mt6000"
         type: string
       packages:
-        description: "Base packages (space-separated). Leave empty to use firmware-packages.txt (pesa1234's manifest)."
+        description: "Override base packages (space-separated). Empty = rely on the ImageBuilder's DEFAULT_PACKAGES, which already contains pesa's full manifest (LuCI, kmods, etc)."
         required: false
         default: ""
         type: string
       extra_packages:
-        description: "Additional packages on top of base (space-separated). These are packages pesa does not ship."
+        description: "Additional packages on top of DEFAULT_PACKAGES (space-separated). Use for things pesa does not ship."
         required: false
         default: "nano bash tailscale luci-app-tailscale-community luci-app-sqm sqm-scripts"
         type: string
@@ -33,8 +33,6 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v5
-
       - name: Request firmware build
         id: request
         run: |
@@ -54,25 +52,21 @@ jobs:
             VERSION="${INPUT}-SNAPSHOT"
           fi
 
-          # Base packages: use `packages` input if provided, otherwise fall back
-          # to the manifest committed in firmware-packages.txt (pesa1234's set).
+          # Base packages: let DEFAULT_PACKAGES handle pesa parity by default
+          # (baked into the IB at container build time from the matching
+          # .manifest). Only enumerate a base if the caller explicitly
+          # overrode `packages`.
           BASE="${{ inputs.packages }}"
           if [[ -z "${BASE// }" ]]; then
-            if [[ -f firmware-packages.txt ]]; then
-              BASE=$(tr '\n' ' ' < firmware-packages.txt)
-              echo "Base packages: firmware-packages.txt ($(wc -l < firmware-packages.txt) packages)"
-            else
-              echo "::warning::No packages input and firmware-packages.txt missing — building bare minimum"
-            fi
+            echo "Base packages: relying on IB DEFAULT_PACKAGES"
           else
             echo "Base packages: overridden via input"
           fi
 
-          # Build packages JSON array from base + extra packages
           ALL_PACKAGES="$BASE ${{ inputs.extra_packages }}"
           PACKAGES_JSON=$(echo "$ALL_PACKAGES" | tr -s ' \n' '\n' | grep -v '^$' | sort -u | jq -R . | jq -sc .)
           PKG_COUNT=$(echo "$PACKAGES_JSON" | jq 'length')
-          echo "Total unique packages: $PKG_COUNT"
+          echo "Additional packages passed to ASU: $PKG_COUNT"
 
           echo "Requesting build:"
           echo "  Version: $VERSION"

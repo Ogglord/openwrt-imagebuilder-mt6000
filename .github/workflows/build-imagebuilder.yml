@@ -31,9 +31,10 @@ jobs:
       branch: ${{ steps.discover.outputs.branch }}
       asu_version: ${{ steps.discover.outputs.asu_version }}
       commit_sha: ${{ steps.discover.outputs.commit_sha }}
+      release_dir: ${{ steps.discover.outputs.release_dir }}
       new_commits: ${{ steps.discover.outputs.new_commits }}
     steps:
-      - name: Discover latest branch and check for new commits
+      - name: Discover latest release dir and check for new commits
         id: discover
         env:
           FORCE_BRANCH: ${{ inputs.force_branch }}
@@ -43,70 +44,84 @@ jobs:
 
           # Derive ASU X.Y version from pesa branch name
           # next-r4.7.4.rss.mtk → 4.7, next-r4.8.0.rss.mtk → 4.8
+          # Test branches (containing -test) still get an ASU version — the
+          # config.buildinfo pipeline doesn't care about test-ness, only
+          # that a release dir exists for the branch.
           derive_asu_version() {
             local branch="$1"
             if [[ "$branch" == *"-test"* ]]; then
-              echo "SKIP"  # test branches handled manually
+              echo "SKIP"
               return
             fi
             echo "$branch" | sed 's/^next-r//' | cut -d. -f1,2
           }
 
-          if [[ -n "${FORCE_BRANCH:-}" ]]; then
-            echo "Force building branch: $FORCE_BRANCH"
-            ASU_VER=$(derive_asu_version "$FORCE_BRANCH")
-            if [[ "$ASU_VER" == "SKIP" ]]; then
-              echo "Test branch — container-only build (no ASU integration)"
-            fi
-            LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${FORCE_BRANCH}" --jq .sha)
-            echo "branch=${FORCE_BRANCH}" >> "$GITHUB_OUTPUT"
-            echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
-            echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
-            echo "new_commits=true" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # List directories in MT6000_cust_build and pick the latest
+          # List pesa's release directories (shared by both code paths below)
           DIRS=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
             -H "Accept: application/vnd.github.v3+json" | \
             jq -r '.[] | select(.type == "dir") | .name' | \
             grep -E '^[0-9]{4}' || true)
 
           if [[ -z "$DIRS" ]]; then
-            echo "No release directories found"
+            echo "::error::No release directories found in MT6000_cust_build"
             echo "new_commits=false" >> "$GITHUB_OUTPUT"
-            exit 0
+            exit 1
           fi
 
-          LATEST_BRANCH=$(echo "$DIRS" | sort | tail -1 | sed -E 's/^[0-9]{4}[._-][0-9]{2}[._-][0-9]{2}_r[0-9]+-?[a-f0-9]*_//')
-          echo "Latest branch: $LATEST_BRANCH"
+          # Pick release dir:
+          #   * force_branch: latest dir whose branch suffix matches (supports
+          #     re-building the newest release of a branch, including test ones)
+          #   * auto: absolute latest across all branches
+          if [[ -n "${FORCE_BRANCH:-}" ]]; then
+            RELEASE_DIR=$(echo "$DIRS" | grep -E "_${FORCE_BRANCH}$" | sort | tail -1 || true)
+            if [[ -z "$RELEASE_DIR" ]]; then
+              echo "::error::No release dir for branch '${FORCE_BRANCH}' in MT6000_cust_build"
+              exit 1
+            fi
+            echo "Force-building branch: ${FORCE_BRANCH}"
+          else
+            RELEASE_DIR=$(echo "$DIRS" | sort | tail -1)
+          fi
 
-          # Get the latest commit SHA from pesa's repo for this branch
-          LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${LATEST_BRANCH}" --jq .sha)
-          echo "Latest commit SHA: $LATEST_SHA"
+          # Parse: YYYY-MM-DD_rREV-HASH_BRANCH  (hash is short, branch may contain hyphens)
+          BRANCH=$(echo "$RELEASE_DIR" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}_r[0-9]+-[a-f0-9]+_//')
+          RELEASE_COMMIT=$(echo "$RELEASE_DIR" | sed -E 's/^[0-9]{4}-[0-9]{2}-[0-9]{2}_r[0-9]+-([a-f0-9]+)_.*/\1/')
+          if [[ -z "$BRANCH" || -z "$RELEASE_COMMIT" || "$BRANCH" == "$RELEASE_DIR" ]]; then
+            echo "::error::Could not parse release dir: $RELEASE_DIR"
+            exit 1
+          fi
 
-          # Check if we already built this commit (SHA stored in per-branch release body)
-          TAG="mediatek-filogic-${LATEST_BRANCH}"
+          echo "Release dir:    ${RELEASE_DIR}"
+          echo "Branch:         ${BRANCH}"
+          echo "Release commit: ${RELEASE_COMMIT} (short)"
+
+          # Resolve short hash → full SHA against pesa/openwrt so we can
+          # git-fetch exactly that commit later (and so the "already built"
+          # check compares a stable identifier).
+          LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${RELEASE_COMMIT}" --jq .sha)
+          echo "Full commit SHA: ${LATEST_SHA}"
+
+          # Skip if we've already built this commit for this branch
+          TAG="mediatek-filogic-${BRANCH}"
           ALREADY_BUILT=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" --jq .body 2>/dev/null | grep -c "${LATEST_SHA}" || true)
-
-          if [[ "$ALREADY_BUILT" -gt 0 ]]; then
+          if [[ "$ALREADY_BUILT" -gt 0 && -z "${FORCE_BRANCH:-}" ]]; then
             echo "Commit ${LATEST_SHA} already built — skipping"
             echo "new_commits=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "New commit detected — will build"
-            echo "new_commits=true" >> "$GITHUB_OUTPUT"
+            exit 0
           fi
 
-          ASU_VER=$(derive_asu_version "$LATEST_BRANCH")
-          if [[ "$ASU_VER" == "SKIP" ]]; then
-            echo "::warning::Latest branch is a test branch ($LATEST_BRANCH) — skipping"
+          ASU_VER=$(derive_asu_version "$BRANCH")
+          if [[ "$ASU_VER" == "SKIP" && -z "${FORCE_BRANCH:-}" ]]; then
+            echo "::warning::Latest branch is a test branch (${BRANCH}) — skipping scheduled run"
             echo "new_commits=false" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
-          echo "branch=${LATEST_BRANCH}" >> "$GITHUB_OUTPUT"
+          echo "new_commits=true"   >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}"   >> "$GITHUB_OUTPUT"
           echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
           echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
+          echo "release_dir=${RELEASE_DIR}" >> "$GITHUB_OUTPUT"
 
 
   build:
@@ -149,10 +164,22 @@ jobs:
         if: inputs.runner != 'ubuntu-latest' && inputs.runner != ''
         run: rm -rf ${{ runner.temp }}/openwrt
 
-      - name: Clone OpenWrt source
+      - name: Clone OpenWrt source at release commit
+        env:
+          BRANCH: ${{ needs.discover.outputs.branch }}
+          RELEASE_SHA: ${{ needs.discover.outputs.commit_sha }}
         run: |
-          git clone --depth 1 -b "${{ needs.discover.outputs.branch }}" \
-            https://github.com/pesa1234/openwrt.git ${{ runner.temp }}/openwrt
+          set -euo pipefail
+          DEST="${{ runner.temp }}/openwrt"
+          # Fetch just the release commit — much smaller than cloning the
+          # full branch history, and guarantees we build from the exact
+          # source pesa built his release from.
+          mkdir -p "$DEST" && cd "$DEST"
+          git init --quiet
+          git remote add origin https://github.com/pesa1234/openwrt.git
+          git fetch --depth 1 origin "$RELEASE_SHA"
+          git checkout --quiet FETCH_HEAD
+          echo "Checked out $(git rev-parse HEAD) on ${BRANCH}"
 
       - name: Cache dl/ directory
         run: |
@@ -195,12 +222,15 @@ jobs:
 
       - name: Download and apply config
         working-directory: ${{ runner.temp }}/openwrt
+        env:
+          RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
         run: |
-          if echo "${{ needs.discover.outputs.branch }}" | grep -q "test6.18"; then
-            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/config_file/test6.18/.config"
-          else
-            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/config_file/.config"
-          fi
+          # Use the *resolved* config.buildinfo from pesa's release directory
+          # instead of the pre-build config_file/.config template. This is the
+          # exact config pesa's firmware was built from, so our IB-built
+          # packages match the .manifest we use as firmware-packages.txt —
+          # no risk of "package X not found" at make image time.
+          CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
           echo "Fetching config from: ${CONFIG_URL}"
           curl -fsSL "${CONFIG_URL}" -o .config
           echo "CONFIG_IB=y" >> .config
@@ -478,6 +508,36 @@ jobs:
           tar -czf "$GITHUB_WORKSPACE/packages-staging.tar.gz" \
             -C "${STAGING}" .
 
+      - name: Generate firmware-packages.txt from pesa's manifest
+        env:
+          RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          # The .manifest for the release we're rebuilding lists every package
+          # pesa baked into his firmware. Using it here guarantees parity with
+          # the config.buildinfo we just compiled against, so the resulting
+          # ImageBuilder's DEFAULT_PACKAGES can never reference a package the
+          # package repo doesn't have.
+          MANIFEST_NAME=$(gh api \
+            "repos/pesa1234/MT6000_cust_build/contents/${RELEASE_DIR}/targets/mediatek/filogic" \
+            --jq '.[] | select(.name | endswith(".manifest")) | .name' | head -1)
+          if [[ -z "$MANIFEST_NAME" ]]; then
+            echo "::error::No .manifest found in pesa's release dir ${RELEASE_DIR}"
+            exit 1
+          fi
+          MANIFEST_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/${MANIFEST_NAME}"
+          echo "Fetching manifest: ${MANIFEST_URL}"
+          curl -fsSL "${MANIFEST_URL}" | awk '{print $1}' | sort -u > "$GITHUB_WORKSPACE/firmware-packages.txt"
+          echo "Packages in manifest: $(wc -l < "$GITHUB_WORKSPACE/firmware-packages.txt")"
+
+      - name: Upload firmware-packages artifact
+        uses: actions/upload-artifact@v5
+        with:
+          name: firmware-packages
+          path: firmware-packages.txt
+          retention-days: 1
+
       - name: Upload profiles.json artifact
         uses: actions/upload-artifact@v5
         with:
@@ -539,6 +599,14 @@ jobs:
         uses: actions/download-artifact@v5
         with:
           name: packages-staging
+
+      - name: Download firmware-packages artifact into build context
+        uses: actions/download-artifact@v5
+        with:
+          name: firmware-packages
+          # Land at repo root so the Containerfile's COPY picks it up;
+          # overwrites the committed fallback used by build-firmware.yml.
+          path: .
 
       - name: Publish packages and metadata to releases branch
         if: needs.discover.outputs.asu_version != 'SKIP'

@@ -60,20 +60,20 @@ The `Containerfile` in this repo is **stage 2** (slim runtime). The build contex
 This branch is a **metadata-only** store consumed by ASU. No source code.
 
 ```
-branches.json                                                       # ASU branch config
-.versions.json                                                      # available versions
-releases/{version}/.targets.json                                    # per-version targets
-releases/{version}/packages/{arch}/feeds.conf                       # feed name list
-releases/{version}/packages/{arch}/{feed}/index.json                # signed APK feed per name
-releases/{version}/packages/{arch}/{feed}/*.apk
-releases/{version}/targets/mediatek/filogic/profiles.json           # device profiles
-releases/{version}/targets/mediatek/filogic/*.manifest              # build manifests
-releases/{version}/targets/mediatek/filogic/*.buildinfo
-releases/{version}/targets/mediatek/filogic/packages/index.json     # target kmods
-releases/{version}/targets/mediatek/filogic/packages/*.apk
+branches.json                                           # ASU branch config
+.versions.json                                          # available versions
+{version}/.targets.json                                 # per-version targets
+{version}/packages/{arch}/feeds.conf                    # feed name list
+{version}/packages/{arch}/{feed}/index.json             # signed APK feed per name
+{version}/packages/{arch}/{feed}/*.apk
+{version}/targets/mediatek/filogic/profiles.json        # device profiles
+{version}/targets/mediatek/filogic/*.manifest           # build manifests
+{version}/targets/mediatek/filogic/*.buildinfo
+{version}/targets/mediatek/filogic/packages/index.json  # target kmods
+{version}/targets/mediatek/filogic/packages/*.apk
 ```
 
-The `path` field in `branches.json` uses the template `releases/{version}` — ASU expands `{version}` at runtime with the full `-SNAPSHOT` suffix, then fetches packages from `{path}/packages/{arch}/` and target kmods from `{path}/targets/{target}/packages/`.
+The `path` field in `branches.json` is `"{version}"` — ASU expands it at runtime with the full `-SNAPSHOT` suffix, then fetches packages from `{path}/packages/{arch}/` and target kmods from `{path}/targets/{target}/packages/`. The branch is itself named `releases`, so the raw GitHub URL already contains one `/releases/` (the branch); keeping the content at the branch root avoids a stutter like `.../releases/releases/4.8-SNAPSHOT/...` in every URL.
 
 `feeds.conf` is opkg-format (whitespace-separated columns); ASU's `parse_feeds_conf` only reads the second column (the feed name), so the other fields are placeholders.
 

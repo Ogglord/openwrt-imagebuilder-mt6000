@@ -623,17 +623,20 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
             /tmp/releases-branch
 
-          # Publish under releases/{version}/ — the path branches.json
-          # tells ASU to consume. Wipe first so stale files don't linger
-          # across rebuilds.
-          rm -rf "/tmp/releases-branch/releases/${VERSION}"
-          mkdir -p "/tmp/releases-branch/releases/${VERSION}"
-          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/releases/${VERSION}/"
+          # Publish under {version}/ at the branch root — the path
+          # branches.json tells ASU to consume. The branch itself is named
+          # 'releases', so the raw.githubusercontent.com URL already contains
+          # one /releases/ (the branch); nesting another releases/ directory
+          # inside would duplicate it in every URL. Wipe first so stale
+          # files don't linger across rebuilds.
+          rm -rf "/tmp/releases-branch/${VERSION}"
+          mkdir -p "/tmp/releases-branch/${VERSION}"
+          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/${VERSION}/"
 
           cd /tmp/releases-branch
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add releases/
+          git add "${VERSION}/"
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "ci: publish packages and metadata for ${VERSION}"
 
@@ -671,7 +674,7 @@ jobs:
           file: ./Containerfile
           push: true
           build-args: |
-            PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/releases/${{ needs.discover.outputs.asu_version }}-SNAPSHOT/packages/aarch64_cortex-a53
+            PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/${{ needs.discover.outputs.asu_version }}-SNAPSHOT/packages/aarch64_cortex-a53
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
@@ -690,7 +693,7 @@ jobs:
           **Commit:** ${{ needs.discover.outputs.commit_sha }}
           **Version:** ${VERSION}
           **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
-          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/releases/${VERSION}/packages/" \
+          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/${VERSION}/packages/" \
             packages-staging.tar.gz
 
       # profiles.json is already included in the git-based publish above

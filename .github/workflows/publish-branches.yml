@@ -92,7 +92,7 @@ jobs:
                 name: $name,
                 enabled: true,
                 snapshot: true,
-                path: "releases/{version}",
+                path: "{version}",
                 path_packages: "DEPRECATED",
                 package_changes: [],
                 targets: {"mediatek/filogic": $arch}
@@ -240,7 +240,7 @@ jobs:
           for targets_file in entries/targets-*.json; do
             BRANCH_KEY=$(basename "$targets_file" | sed 's/^targets-//' | sed 's/\.json$//')
             VERSION="${BRANCH_KEY}-SNAPSHOT"
-            DEST_PATH="releases/${VERSION}/.targets.json"
+            DEST_PATH="${VERSION}/.targets.json"
 
             echo "Pushing ${DEST_PATH}..."
 

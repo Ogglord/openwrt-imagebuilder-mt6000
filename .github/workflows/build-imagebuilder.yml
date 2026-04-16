@@ -576,6 +576,8 @@ jobs:
           build-args: |
             PACKAGES_BASE_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/targets/mediatek-filogic-${{ needs.discover.outputs.branch }}/packages/aarch64_cortex-a53
           tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
 
       - name: Create release to record built commit
         env:

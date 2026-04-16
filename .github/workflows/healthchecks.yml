@@ -2,7 +2,7 @@ name: Ping Healthchecks.io
 
 on:
   workflow_run:
-    workflows: ["Build ImageBuilder Containers"]
+    workflows: ["Build ImageBuilder"]
     types: [completed]
 
 jobs:

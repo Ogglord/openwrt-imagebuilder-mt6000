@@ -2,7 +2,7 @@ name: Create metadata (post-build)
 
 on:
   workflow_run:
-    workflows: ["Build ImageBuilder Containers"]
+    workflows: ["Build ImageBuilder"]
     types: [completed]
   workflow_dispatch:
     inputs:

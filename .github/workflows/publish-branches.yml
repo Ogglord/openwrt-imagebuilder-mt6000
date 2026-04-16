@@ -1,4 +1,4 @@
-name: Publish branches.json
+name: Create metadata (post-build)
 
 on:
   workflow_run:

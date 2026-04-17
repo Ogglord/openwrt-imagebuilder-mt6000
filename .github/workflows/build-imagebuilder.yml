@@ -689,7 +689,7 @@ jobs:
           file: ./Containerfile
           push: true
           build-args: |
-            REPO_VERSION_URL=https://raw.githubusercontent.com/${{ github.repository }}/refs/heads/releases/${{ needs.discover.outputs.asu_version }}-SNAPSHOT
+            REPO_VERSION_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/${{ needs.discover.outputs.asu_version }}-SNAPSHOT
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

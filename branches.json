@@ -9,5 +9,16 @@
     "targets": {
       "mediatek/filogic": "aarch64_cortex-a53"
     }
+  },
+  "4.8": {
+    "name": "r4.8.0.rss.mtk-test6.18",
+    "enabled": true,
+    "snapshot": true,
+    "path": "{version}",
+    "path_packages": "DEPRECATED",
+    "package_changes": [],
+    "targets": {
+      "mediatek/filogic": "aarch64_cortex-a53"
+    }
   }
 }

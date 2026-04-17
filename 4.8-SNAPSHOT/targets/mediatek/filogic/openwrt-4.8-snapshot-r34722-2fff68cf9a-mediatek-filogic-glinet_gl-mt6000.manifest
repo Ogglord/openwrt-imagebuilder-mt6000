@@ -1,7 +1,7 @@
 apk-openssl - 3.0.5-r3
 attendedsysupgrade-common - 10
 avahi-dbus-daemon - 0.8-r10
-base-files - 1~2fff68c
+base-files - 1~2fff68cf9a
 blkid - 2.41.3-r1
 bridger - 2026.03.23~de7e00a5
 busybox - 1.37.0-r6

@@ -263,7 +263,12 @@ jobs:
           # from a depth-1 clone and would yield r0-<7char-sha>).
           sed -i '/^CONFIG_VERSION_NUMBER=/d;/^CONFIG_VERSION_REPO=/d;/^CONFIG_VERSION_CODE=/d' .config
           echo "CONFIG_VERSION_NUMBER=\"${ASU_VER}-SNAPSHOT\"" >> .config
-          echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
+          # VERSION_REPO points at the releases-branch directory that actually
+          # serves our per-version artifacts. Pair with the Containerfile's sed
+          # on include/feeds.mk that strips pesa's RELEASE_DIR segment, so the
+          # resolved URL is %U/targets/%S/packages/packages.adb = this base +
+          # /targets/mediatek/filogic/packages/packages.adb.
+          echo "CONFIG_VERSION_REPO=\"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/releases/${ASU_VER}-SNAPSHOT\"" >> .config
           REV_HASH=$(echo "$RELEASE_DIR" | grep -oE 'r[0-9]+-[a-f0-9]+' | head -1)
           if [[ -n "$REV_HASH" ]]; then
             echo "CONFIG_VERSION_CODE=\"${REV_HASH}\"" >> .config

@@ -177,8 +177,6 @@ jobs:
           context: .
           file: ./Containerfile
           push: true
-          build-args: |
-            REPO_VERSION_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/${{ steps.meta.outputs.asu_version }}-SNAPSHOT
           tags: ${{ steps.tags.outputs.tags }}
           cache-from: type=gha
           cache-to: type=gha,mode=max

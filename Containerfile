@@ -25,7 +25,20 @@ RUN mkdir -p /builder && \
     sed -i \
       -e 's/CONFIG_DEFAULT_libustream-mbedtls=y/CONFIG_DEFAULT_libustream-openssl=y/' \
       -e 's/CONFIG_DEFAULT_wpad-basic-mbedtls=y/CONFIG_DEFAULT_wpad-openssl=y/' \
-      /builder/.config
+      /builder/.config && \
+    # Strip pesa's RELEASE_DIR segment from the apk distfeeds template so the
+    # generated /etc/apk/repositories.d/distfeeds.list resolves against the
+    # releases-branch layout (CONFIG_VERSION_REPO/{version}-SNAPSHOT/targets/...).
+    # Pesa's next-r* branches patch FeedSourcesAppendAPK in include/feeds.mk to
+    # emit '%U/$(DATE)_$(VERSION_CODE)_$(BRANCH)/targets/%S/packages/packages.adb'
+    # — fine for his MT6000_cust_build layout, wrong for ours.
+    if grep -q '$(DATE)_$(VERSION_CODE)_$(BRANCH)/targets' /builder/include/feeds.mk; then \
+      sed -i 's|$(DATE)_$(VERSION_CODE)_$(BRANCH)/||g' /builder/include/feeds.mk; \
+      echo "Stripped pesa RELEASE_DIR segment from include/feeds.mk"; \
+    else \
+      echo "ERROR: pesa RELEASE_DIR segment not found in include/feeds.mk — template may have changed" >&2; \
+      exit 1; \
+    fi
 
 # Bake pesa's manifest into DEFAULT_PACKAGES so `make image` with no
 # PACKAGES= argument produces pesa-parity firmware (LuCI + all kmods + the
@@ -44,34 +57,6 @@ RUN if [ -s /tmp/firmware-packages.txt ]; then \
     fi && \
     rm -f /tmp/firmware-packages.txt && \
     chown -R buildbot:buildbot /builder
-
-# Ship /etc/apk/repositories.d/distfeeds.list into the firmware as a
-# rootfs overlay via /builder/files/. IB's `make image` applies files/
-# on top of the installed rootfs (same mechanism the workflow uses for
-# the APK signing key), so our list overrides whatever OpenWrt would
-# otherwise auto-compose from CONFIG_VERSION_REPO.
-#
-# Layout: our mirror first (primary), OpenWrt snapshots as fallback so
-# apk can resolve packages we don't mirror (bash, nano, git, ...).
-ARG REPO_VERSION_URL=""
-RUN if [ -n "${REPO_VERSION_URL}" ]; then \
-      set -eu; \
-      ARCH="aarch64_cortex-a53"; \
-      TARGET="mediatek/filogic"; \
-      DISTFEEDS="/builder/files/etc/apk/repositories.d/distfeeds.list"; \
-      mkdir -p "$(dirname "${DISTFEEDS}")"; \
-      { \
-        echo "${REPO_VERSION_URL}/targets/${TARGET}/packages/packages.adb"; \
-        for feed in base luci packages routing; do \
-          echo "${REPO_VERSION_URL}/packages/${ARCH}/${feed}/packages.adb"; \
-        done; \
-        for feed in base luci packages routing telephony video; do \
-          echo "https://downloads.openwrt.org/snapshots/packages/${ARCH}/${feed}/packages.adb"; \
-        done; \
-      } > "${DISTFEEDS}"; \
-      chown -R buildbot:buildbot /builder/files; \
-      echo "--- wrote ${DISTFEEDS} ---"; cat "${DISTFEEDS}"; \
-    fi
 
 # ASU runs `setup.sh` for snapshot builds. Upstream imagebuilders ship one
 # that updates feeds; ours are fully pre-built so a no-op suffices.

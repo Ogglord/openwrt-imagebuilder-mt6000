@@ -261,6 +261,21 @@ jobs:
           fi
           sed -i '/^CONFIG_VERSION_REPO=/d' .config
           echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
+          # Pin CONFIG_VERSION_CODE to pesa's actual revision instead of
+          # letting getver.sh compute it. The depth-1 fetch above has only
+          # one commit of history, so getver.sh yields "r0-<7char-sha>".
+          # release_dir has the shape YYYY-MM-DD_rREV-HASH_BRANCH (e.g.
+          # 2026-04-16_r34302-4cd1e4be44_next-r4.8.0.rss.mtk-test6.18), so
+          # the `rREV-HASH` chunk is exactly what firmware / ASU should
+          # report.
+          REV_HASH=$(echo "$RELEASE_DIR" | grep -oE 'r[0-9]+-[a-f0-9]+' | head -1)
+          if [[ -n "$REV_HASH" ]]; then
+            sed -i '/^CONFIG_VERSION_CODE=/d' .config
+            echo "CONFIG_VERSION_CODE=\"${REV_HASH}\"" >> .config
+            echo "Pinned CONFIG_VERSION_CODE=${REV_HASH}"
+          else
+            echo "::warning::Could not parse rREV-HASH from release_dir='${RELEASE_DIR}' — falling back to getver.sh (will produce r0-*)"
+          fi
         env:
           FORCE_UNSAFE_CONFIGURE: 1
           LC_ALL: C

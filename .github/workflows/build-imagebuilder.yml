@@ -240,15 +240,15 @@ jobs:
           echo "Fetching config from: ${CONFIG_URL}"
           curl -fsSL "${CONFIG_URL}" -o .config
 
-          # ImageBuilder + BPF/LLVM host toolchain overrides.
-          # Intentionally NOT setting CONFIG_IB_STANDALONE=y: standalone mode
-          # omits `--repositories-file $(TOPDIR)/repositories` from the apk
-          # invocation in target/imagebuilder/files/Makefile, which means
-          # `make image` can only resolve packages in our local packages.adb.
-          # Unsetting it lets apk fall through to the feeds listed in
-          # repositories (target kmods on our mirror + upstream snapshots via
-          # pesa's $(OWRT_LINK)) for packages we don't mirror (nano, git, …).
+          # ImageBuilder (standalone) + BPF/LLVM host toolchain overrides.
+          # CONFIG_IB_STANDALONE=y makes target/imagebuilder/Makefile copy ALL
+          # built .apk files into the IB tarball's packages/ dir (otherwise only
+          # base-files/libc/kernel get included), preserving pesa's patched
+          # builds. We then patch the two places standalone mode *disables* so
+          # that upstream-snapshot fallback still works — see the "Allow apk
+          # upstream fallback" step below.
           echo "CONFIG_IB=y" >> .config
+          echo "CONFIG_IB_STANDALONE=y" >> .config
           sed -i '/CONFIG_BPF_TOOLCHAIN/d;/CONFIG_USE_LLVM_HOST/d' .config
           echo "CONFIG_BPF_TOOLCHAIN_HOST=y" >> .config
           echo "CONFIG_USE_LLVM_HOST=y" >> .config
@@ -303,6 +303,48 @@ jobs:
             echo "::error::pesa RELEASE_DIR segment not found in include/feeds.mk — template may have changed"
             exit 1
           fi
+
+      - name: Allow apk upstream-snapshot fallback in standalone IB
+        working-directory: ${{ runner.temp }}/openwrt
+        run: |
+          set -euo pipefail
+
+          # With CONFIG_IB_STANDALONE=y, target/imagebuilder/Makefile gates the
+          # generation of $(PKG_BUILD_DIR)/repositories behind
+          # `ifeq ($(CONFIG_IB_STANDALONE),)`, and target/imagebuilder/files/
+          # Makefile drops `--repositories-file` from the apk invocation — so
+          # packages not in the local mirror (nano, git, …) can't be resolved
+          # at `make image` time. Two surgical patches let upstream fallback
+          # work without forfeiting the standalone packaging (all built .apk
+          # files still ship in the IB tarball).
+
+          # 1. Drop the standalone guard around FeedSourcesAppendAPK so the
+          #    repositories file is written during make world. Only the APK
+          #    case (between `ifneq ($(CONFIG_USE_APK),)` and `else`); leave
+          #    the OPKG case and the package-copy strategy alone. Pesa's
+          #    Makefile has 3 CONFIG_IB_STANDALONE sites (APK repo gen, OPKG
+          #    repo gen, package copy strategy); we expect 2 to remain.
+          before=$(grep -c 'CONFIG_IB_STANDALONE' target/imagebuilder/Makefile)
+          sed -i '/^ifneq ($(CONFIG_USE_APK),)/,/^else$/{
+            /^  ifeq ($(CONFIG_IB_STANDALONE),)$/d
+            /^  endif$/d
+          }' target/imagebuilder/Makefile
+          after=$(grep -c 'CONFIG_IB_STANDALONE' target/imagebuilder/Makefile)
+          if [[ "$before" == "3" && "$after" == "2" ]]; then
+            echo "Dropped CONFIG_IB_STANDALONE guard from APK repositories generation ($before → $after)"
+          else
+            echo "::error::expected 3 → 2 CONFIG_IB_STANDALONE occurrences in target/imagebuilder/Makefile, got $before → $after"
+            exit 1
+          fi
+
+          # 2. Always pass --repositories-file to apk, regardless of standalone.
+          sed -i 's|$(if $(CONFIG_IB_STANDALONE),,--repositories-file $(TOPDIR)/repositories)|--repositories-file $(TOPDIR)/repositories|' \
+            target/imagebuilder/files/Makefile
+          if grep -q '$(if $(CONFIG_IB_STANDALONE),,--repositories-file' target/imagebuilder/files/Makefile; then
+            echo "::error::failed to strip CONFIG_IB_STANDALONE gating from apk invocation"
+            exit 1
+          fi
+          echo "Always passing --repositories-file to apk in target/imagebuilder/files/Makefile"
 
       - name: Inject APK signing key
         working-directory: ${{ runner.temp }}/openwrt

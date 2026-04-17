@@ -68,10 +68,29 @@ These look interchangeable and aren't. Both get written into the firmware rootfs
 
 Two files, same template, different lifecycles:
 
-- **`$(TOPDIR)/repositories`** — generated at `make world` (step 1) by `target/imagebuilder/Makefile:49`. Consumed at `make image` (ASU worker) time by the `APK` invocation in `target/imagebuilder/files/Makefile:100-104`, but **only** if `CONFIG_IB_STANDALONE` is unset; when set, apk sees only `--repository $(PACKAGE_DIR)/packages.adb` (the local mirror) and `make image` fails for any package not locally built (nano, git, …). We deliberately leave `CONFIG_IB_STANDALONE` unset so apk falls through to pesa's `$(OWRT_LINK)` upstream snapshots for anything we don't mirror.
+- **`$(TOPDIR)/repositories`** — generated at `make world` (step 1) by `target/imagebuilder/Makefile:49`. Consumed at `make image` (ASU worker) time by the `APK` invocation in `target/imagebuilder/files/Makefile:100-104`. Governs build-time package resolution (what `make image PACKAGES=...` can pull in).
 - **`/etc/apk/repositories.d/distfeeds.list`** (firmware runtime) — generated at `make image` time by `package/base-files/Makefile`. Same `FeedSourcesAppendAPK` template, expanded at a later stage. Governs on-device `apk update && apk install`.
 
 Both files share `include/feeds.mk`'s template, so the feeds.mk sed has to land **before** `make world` to cleanly fix both surfaces.
+
+### Why we keep `CONFIG_IB_STANDALONE=y` and patch around it
+
+`CONFIG_IB_STANDALONE=y` gates three blocks in pesa's `target/imagebuilder/Makefile` + `files/Makefile`:
+
+1. `Makefile:48-51` — generation of `$(TOPDIR)/repositories` (skipped when standalone).
+2. `Makefile:71-81` — which `.apk` files get copied into the IB tarball's `packages/` dir: **all** built packages (standalone) vs just `base-files`, `libc`, `kernel` (non-standalone).
+3. `files/Makefile:101` — whether `--repositories-file` is passed to apk at `make image` time.
+
+Dropping `IB_STANDALONE=y` (enabling non-standalone) allows upstream-snapshot fallback via (3), but also strips 2/3 of pesa's packages from the IB tarball (via 2) and forces them to be pulled from upstream snapshots — **losing pesa's patches on `luci`, `wpad-openssl`, `dropbear`, etc.** The fork's purpose is to ship pesa's build, so this is unacceptable.
+
+Instead, `build-imagebuilder.yml`'s "Allow apk upstream-snapshot fallback" step keeps `IB_STANDALONE=y` and surgically removes the guards on (1) and (3) via sed before `make world`:
+
+- Drops `ifeq ($(CONFIG_IB_STANDALONE),)` + its matching `endif` in the APK branch of `Makefile` (scoped to the range `ifneq ($(CONFIG_USE_APK),) … else` so the OPKG branch and package-copy strategy stay untouched).
+- Strips the `$(if $(CONFIG_IB_STANDALONE),,…)` wrapper from the APK command line in `files/Makefile`.
+
+Result: IB tarball still ships every pesa-built package (via (2), still gated on standalone), `$(TOPDIR)/repositories` still gets generated, and apk at `make image` time sees both `--repository $(PACKAGE_DIR)/packages.adb` (local, pesa-patched packages win) and `--repositories-file $(TOPDIR)/repositories` (upstream snapshots for anything we didn't build — nano, git, …).
+
+Verification: after the seds, `target/imagebuilder/Makefile` should retain exactly 2 `CONFIG_IB_STANDALONE` references (OPKG branch + package-copy branch); `files/Makefile` should have 0. The CI step asserts both.
 
 ## Containerfile details
 

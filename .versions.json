@@ -3,6 +3,7 @@
   "stable_version": "4.8-SNAPSHOT",
   "oldstable_version": "",
   "versions_list": [
-    "4.8-SNAPSHOT"
+    "4.8-SNAPSHOT",
+    "4.7-SNAPSHOT"
   ]
 }

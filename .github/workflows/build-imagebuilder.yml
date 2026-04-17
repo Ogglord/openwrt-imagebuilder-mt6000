@@ -272,7 +272,13 @@ jobs:
           REV_HASH=$(echo "$RELEASE_DIR" | grep -oE 'r[0-9]+-[a-f0-9]+' | head -1)
           if [[ -n "$REV_HASH" ]]; then
             echo "CONFIG_VERSION_CODE=\"${REV_HASH}\"" >> .config
-            echo "Pinned CONFIG_VERSION_CODE=${REV_HASH}"
+            # scripts/getver.sh prefers a TOPDIR/version file over git-rev-list,
+            # which returns r0-<hash> on a shallow clone. REVISION flows through
+            # VERSION_SED_SCRIPT's %R into /etc/openwrt_release's DISTRIB_REVISION
+            # (distinct from %C=VERSION_CODE), so the CONFIG_VERSION_CODE pin
+            # alone wasn't enough.
+            echo "$REV_HASH" > version
+            echo "Pinned CONFIG_VERSION_CODE=${REV_HASH} and wrote TOPDIR/version"
           else
             echo "::warning::Could not parse rREV-HASH from release_dir='${RELEASE_DIR}' — falling back to getver.sh (r0-*)"
           fi

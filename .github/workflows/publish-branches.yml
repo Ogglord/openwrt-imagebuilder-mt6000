@@ -29,9 +29,20 @@ jobs:
         run: |
           set -euo pipefail
 
+          # Dedupe by ASU X.Y key (next-r4.7.4 and next-r4.7.5 both → 4.7):
+          # keep only the most recently published release per key so
+          # branches.json / GHCR tags / releases-branch artifacts all agree on
+          # one winner per X.Y. Most-recent wins.
           RELEASES=$(gh api "repos/${{ github.repository }}/releases" --paginate \
-            --jq '.[].tag_name' | grep '^mediatek-filogic-' | \
-            sed 's/^mediatek-filogic-//' || true)
+            | jq -r '
+              [.[]
+                | select(.tag_name | startswith("mediatek-filogic-"))
+                | {pesa: (.tag_name | sub("^mediatek-filogic-"; "")),
+                   published_at}]
+              | group_by(.pesa | sub("^next-r"; "") | split(".") | .[0:2] | join("."))
+              | map(sort_by(.published_at) | last | .pesa)
+              | .[]
+            ' || true)
 
           if [[ -z "$RELEASES" ]]; then
             echo "No releases found"
@@ -39,15 +50,12 @@ jobs:
             exit 0
           fi
 
-          # Skip test branches — handled manually
-          RELEASES=$(echo "$RELEASES" | grep -v '\-test' || true)
-
           if [[ -n "${BRANCH_FILTER:-}" ]]; then
             RELEASES=$(echo "$RELEASES" | grep "^${BRANCH_FILTER}$" || true)
           fi
 
           if [[ -z "$RELEASES" ]]; then
-            echo "No stable releases found"
+            echo "No matching releases found"
             echo 'matrix=[]' >> "$GITHUB_OUTPUT"
             exit 0
           fi

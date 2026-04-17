@@ -128,7 +128,7 @@ The `path` template `{version}` is expanded by ASU at runtime with the full `-SN
 
 ## Manual build
 
-Trigger via the Actions tab → "Build ImageBuilder Containers" → "Run workflow". Inputs:
+Trigger via the Actions tab → "1. Build ImageBuilder" → "Run workflow". Inputs:
 
 - `force_branch` — e.g. `next-r4.8.0.rss.mtk`. Bypasses the "commit already built" skip and requires a release directory for that branch to exist in `pesa1234/MT6000_cust_build` (the config and manifest come from there).
 - `runner` — `ubuntu-latest` (GH-hosted, ~60 min) or a self-hosted runner label.

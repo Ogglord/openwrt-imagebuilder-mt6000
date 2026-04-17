@@ -1,11 +1,11 @@
-name: Ping Healthchecks.io
+name: 4. Healthcheck Report
 
 on:
   # Fires on Containerize completion so "success" means the full pipeline
   # is green (build + publish + container push). Build-only failures are
   # already reported by the in-workflow step in build-imagebuilder.yml.
   workflow_run:
-    workflows: ["Containerize"]
+    workflows: ["2. Containerize"]
     types: [completed]
 
 jobs:

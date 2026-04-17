@@ -1,4 +1,4 @@
-name: Containerize
+name: 2. Containerize
 run-name: "Containerize — ${{ github.event.workflow_run.display_title || inputs.build_run_id || 'latest successful build' }}"
 
 # Split out of build-imagebuilder.yml so the ~2min container step can be
@@ -10,7 +10,7 @@ run-name: "Containerize — ${{ github.event.workflow_run.display_title || input
 #    means "latest successful Build ImageBuilder run".
 on:
   workflow_run:
-    workflows: ["Build ImageBuilder"]
+    workflows: ["1. Build ImageBuilder"]
     types: [completed]
   workflow_dispatch:
     inputs:

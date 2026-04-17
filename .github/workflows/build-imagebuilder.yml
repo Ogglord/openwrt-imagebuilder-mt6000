@@ -1,4 +1,4 @@
-name: Build ImageBuilder
+name: 1. Build ImageBuilder
 run-name: "Build ImageBuilder — ${{ inputs.force_branch || 'auto-discover' }} on ${{ inputs.runner || 'ubuntu-latest' }}"
 
 on:

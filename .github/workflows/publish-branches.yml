@@ -1,11 +1,11 @@
-name: Create metadata (post-build)
+name: 3. Create Metadata
 
 on:
   # Fires after Containerize (which is itself triggered by Build ImageBuilder)
   # so the GH release containerize just created is visible when we enumerate
   # releases to rebuild branches.json.
   workflow_run:
-    workflows: ["Containerize"]
+    workflows: ["2. Containerize"]
     types: [completed]
   workflow_dispatch:
     inputs:

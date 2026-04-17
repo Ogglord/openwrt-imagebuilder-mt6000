@@ -1,4 +1,4 @@
-name: Trigger Firmware Build
+name: 5. Trigger Firmware Build
 
 on:
   workflow_dispatch:

@@ -158,6 +158,7 @@
     "usign": "2025.10.03~c4c72b1b-r1",
     "wifi-scripts": "1.0-r1",
     "wil6210-firmware": "20260312-r1",
+    "wireguard-tools": "1.0.20260223-r1",
     "wireless-regdb": "2026.02.04-r1",
     "wl12xx-firmware": "20260312-r1",
     "wl18xx-firmware": "20260312-r1",

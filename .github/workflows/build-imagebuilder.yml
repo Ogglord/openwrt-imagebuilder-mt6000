@@ -133,14 +133,24 @@ jobs:
     runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
     timeout-minutes: 360
 
+    env:
+      # One source of truth for "runner is GitHub-hosted". Resolves to the
+      # string "true" / "false" — compare with == 'true' in step ifs.
+      IS_GH_RUNNER: ${{ inputs.runner == 'ubuntu-latest' || inputs.runner == '' }}
+      # OpenWrt build-env knobs needed by nearly every make step below.
+      FORCE_UNSAFE_CONFIGURE: 1
+      LC_ALL: C
+      TAR_OPTIONS: --no-same-owner
+
     steps:
-      - name: Ping healthcheck start
+      - name: Healthcheck — start
+        # Tolerate failure: hc-ping going down must not fail the build.
         run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/start" || true
 
       - uses: actions/checkout@v5
 
-      - name: Free disk space
-        if: inputs.runner == 'ubuntu-latest' || inputs.runner == ''
+      - name: Free disk space (GitHub-hosted)
+        if: env.IS_GH_RUNNER == 'true'
         uses: jlumbroso/free-disk-space@main
         with:
           tool-cache: false
@@ -151,8 +161,8 @@ jobs:
           docker-images: true
           swap-storage: true
 
-      - name: Install build dependencies
-        if: inputs.runner == 'ubuntu-latest' || inputs.runner == ''
+      - name: Install build dependencies (GitHub-hosted)
+        if: env.IS_GH_RUNNER == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -162,8 +172,8 @@ jobs:
             zlib1g-dev file wget curl zstd
           sudo apt-get autoremove -y && sudo apt-get clean -y
 
-      - name: Clean previous build
-        if: inputs.runner != 'ubuntu-latest' && inputs.runner != ''
+      - name: Clean self-hosted workspace
+        if: env.IS_GH_RUNNER == 'false'
         run: rm -rf ${{ runner.temp }}/openwrt
 
       - name: Clone OpenWrt source at release commit
@@ -172,10 +182,9 @@ jobs:
           RELEASE_SHA: ${{ needs.discover.outputs.commit_sha }}
         run: |
           set -euo pipefail
+          # Depth-1 fetch of the exact release commit — guarantees byte-parity
+          # with pesa's release without cloning the full branch history.
           DEST="${{ runner.temp }}/openwrt"
-          # Fetch just the release commit — much smaller than cloning the
-          # full branch history, and guarantees we build from the exact
-          # source pesa built his release from.
           mkdir -p "$DEST" && cd "$DEST"
           git init --quiet
           git remote add origin https://github.com/pesa1234/openwrt.git
@@ -183,21 +192,15 @@ jobs:
           git checkout --quiet FETCH_HEAD
           echo "Checked out $(git rev-parse HEAD) on ${BRANCH}"
 
-      - name: Cache dl/ directory
+      - name: Link dl/ to persistent cache (self-hosted)
+        if: env.IS_GH_RUNNER == 'false'
         run: |
-          if [[ "${{ inputs.runner }}" != "ubuntu-latest" && -n "${{ inputs.runner }}" ]]; then
-            # Self-hosted: use a persistent local directory (no network overhead)
-            mkdir -p "$HOME/.cache/openwrt-dl"
-            ln -sf "$HOME/.cache/openwrt-dl" "${{ runner.temp }}/openwrt/dl"
-            echo "Linked dl/ to local cache ($HOME/.cache/openwrt-dl)"
-            echo "Cached files: $(ls "$HOME/.cache/openwrt-dl" | wc -l)"
-          else
-            # GitHub-hosted: just create dl/ — actions/cache handles persistence
-            mkdir -p "${{ runner.temp }}/openwrt/dl"
-          fi
+          mkdir -p "$HOME/.cache/openwrt-dl"
+          ln -sf "$HOME/.cache/openwrt-dl" "${{ runner.temp }}/openwrt/dl"
+          echo "Linked dl/ → $HOME/.cache/openwrt-dl ($(ls "$HOME/.cache/openwrt-dl" | wc -l) cached files)"
 
-      - name: Restore dl/ cache (GitHub-hosted)
-        if: inputs.runner == 'ubuntu-latest' || inputs.runner == ''
+      - name: Cache dl/ (GitHub-hosted)
+        if: env.IS_GH_RUNNER == 'true'
         uses: actions/cache@v5
         with:
           path: ${{ runner.temp }}/openwrt/dl
@@ -206,79 +209,68 @@ jobs:
             openwrt-dl-${{ needs.discover.outputs.branch }}-
             openwrt-dl-
 
-      - name: Update and install feeds
+      - name: Update and install OpenWrt feeds
         working-directory: ${{ runner.temp }}/openwrt
         run: |
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           ./scripts/feeds install -a
 
-      - name: Patch Makefile defaults to match openssl build
+      - name: Patch OpenWrt source for openssl build
         working-directory: ${{ runner.temp }}/openwrt
         run: |
-          # This build uses openssl variants; patch the imagebuilder metadata so
-          # DEFAULT_PACKAGES reflects what was actually compiled (not mbedtls).
+          # This build uses openssl variants; patch DEFAULT_PACKAGES refs so
+          # they match what actually gets compiled (not mbedtls). Mirrors the
+          # same three substitutions the Containerfile applies to the IB
+          # tarball (kept in sync by convention — different file stages).
           sed -i 's/wpad-basic-mbedtls/wpad-openssl/g' target/linux/mediatek/filogic/target.mk
           sed -i 's/libustream-mbedtls/libustream-openssl/g' include/target.mk
           sed -i 's/apk-mbedtls/apk-openssl/g' include/default-packages.mk
 
-      - name: Download and apply config
+      - name: Apply pesa's config.buildinfo
         working-directory: ${{ runner.temp }}/openwrt
+        env:
+          RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
+          ASU_VER: ${{ needs.discover.outputs.asu_version }}
         run: |
-          # Use the *resolved* config.buildinfo from pesa's release directory
-          # instead of the pre-build config_file/.config template. This is the
-          # exact config pesa's firmware was built from, so our IB-built
-          # packages match the .manifest we use as firmware-packages.txt —
-          # no risk of "package X not found" at make image time.
+          # Use pesa's *resolved* config.buildinfo (not the pre-build template)
+          # so our IB-built packages match the .manifest we later use as
+          # firmware-packages.txt — no "package X not found" at make image time.
           CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
           echo "Fetching config from: ${CONFIG_URL}"
           curl -fsSL "${CONFIG_URL}" -o .config
+
+          # ImageBuilder (standalone) + BPF/LLVM host toolchain overrides
           echo "CONFIG_IB=y" >> .config
           echo "CONFIG_IB_STANDALONE=y" >> .config
-          sed -i '/CONFIG_BPF_TOOLCHAIN/d' .config
-          sed -i '/CONFIG_USE_LLVM_HOST/d' .config
+          sed -i '/CONFIG_BPF_TOOLCHAIN/d;/CONFIG_USE_LLVM_HOST/d' .config
           echo "CONFIG_BPF_TOOLCHAIN_HOST=y" >> .config
           echo "CONFIG_USE_LLVM_HOST=y" >> .config
-          echo "LLVM tools on PATH:"
-          llvm-config --version || llvm-config-18 --version || echo "llvm-config not found"
-          which llvm-config llvm-config-18 clang clang-18 2>/dev/null || true
           LLVM_BINDIR=$(llvm-config --bindir 2>/dev/null || llvm-config-18 --bindir 2>/dev/null || echo "/usr/bin")
           LLVM_PATH="${LLVM_BINDIR%/bin}"
           echo "Using LLVM_PATH: ${LLVM_PATH}"
           echo "CONFIG_BPF_TOOLCHAIN_HOST_PATH=\"${LLVM_PATH}\"" >> .config
+
+          # Disable packages we don't want / can't reliably build
           echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config
+
           make defconfig
-          # Set version to the ASU X.Y-SNAPSHOT so firmware reports a
-          # stable identifier that ASU can resolve to the matching
-          # imagebuilder container tag without custom patches. Test
-          # branches share the version with their base series (see the
-          # discover job's derive_asu_version).
-          # Done after defconfig so it cannot be overridden by defaults.
-          ASU_VER="${{ needs.discover.outputs.asu_version }}"
-          sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
+
+          # Version pinning — done after defconfig so defaults can't overwrite.
+          # VERSION_NUMBER ↔ ASU branch key; VERSION_CODE ↔ pesa's actual
+          # rREV-HASH (parsed from release_dir; getver.sh can't compute it
+          # from a depth-1 clone and would yield r0-<7char-sha>).
+          sed -i '/^CONFIG_VERSION_NUMBER=/d;/^CONFIG_VERSION_REPO=/d;/^CONFIG_VERSION_CODE=/d' .config
           echo "CONFIG_VERSION_NUMBER=\"${ASU_VER}-SNAPSHOT\"" >> .config
-          sed -i '/^CONFIG_VERSION_REPO=/d' .config
           echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
-          # Pin CONFIG_VERSION_CODE to pesa's actual revision instead of
-          # letting getver.sh compute it. The depth-1 fetch above has only
-          # one commit of history, so getver.sh yields "r0-<7char-sha>".
-          # release_dir has the shape YYYY-MM-DD_rREV-HASH_BRANCH (e.g.
-          # 2026-04-16_r34302-4cd1e4be44_next-r4.8.0.rss.mtk-test6.18), so
-          # the `rREV-HASH` chunk is exactly what firmware / ASU should
-          # report.
           REV_HASH=$(echo "$RELEASE_DIR" | grep -oE 'r[0-9]+-[a-f0-9]+' | head -1)
           if [[ -n "$REV_HASH" ]]; then
-            sed -i '/^CONFIG_VERSION_CODE=/d' .config
             echo "CONFIG_VERSION_CODE=\"${REV_HASH}\"" >> .config
             echo "Pinned CONFIG_VERSION_CODE=${REV_HASH}"
           else
-            echo "::warning::Could not parse rREV-HASH from release_dir='${RELEASE_DIR}' — falling back to getver.sh (will produce r0-*)"
+            echo "::warning::Could not parse rREV-HASH from release_dir='${RELEASE_DIR}' — falling back to getver.sh (r0-*)"
           fi
-        env:
-          FORCE_UNSAFE_CONFIGURE: 1
-          LC_ALL: C
-          RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
 
       - name: Inject APK signing key
         working-directory: ${{ runner.temp }}/openwrt
@@ -301,14 +293,10 @@ jobs:
 
       - name: Pre-fetch linux-firmware via git-lfs
         working-directory: ${{ runner.temp }}/openwrt
-        env:
-          FORCE_UNSAFE_CONFIGURE: 1
-          LC_ALL: C
         run: |
-          # pesa1234/linux-firmware uses git-lfs for binary blobs. OpenWrt's
-          # download fallback uses `git archive` which omits LFS content,
-          # producing a broken tarball. We clone with LFS here and create the
-          # tarball in the exact format OpenWrt expects in dl/.
+          # pesa1234/linux-firmware uses git-lfs. OpenWrt's default download
+          # path strips LFS content, so we clone with LFS ourselves and stage
+          # the tarball in dl/ under the exact filename OpenWrt expects.
           PACKAGE_MK="package/firmware/linux-firmware/Makefile"
           if [ ! -f "$PACKAGE_MK" ]; then
             echo "Package makefile not found, skipping pre-fetch"
@@ -390,41 +378,29 @@ jobs:
             echo "Patched PKG_MIRROR_HASH to $ACTUAL_HASH"
           fi
 
-      - name: Download package sources
+      - name: Run make download
         working-directory: ${{ runner.temp }}/openwrt
-        env:
-          FORCE_UNSAFE_CONFIGURE: 1
-          TAR_OPTIONS: --no-same-owner
-          LC_ALL: C
         run: |
-          make download -j$(nproc) || {
-            echo "Retrying..."
-            sleep 60
-            make download -j1 V=s
-          }
+          # Retry serially with verbose output if the parallel run fails
+          # (flaky mirrors are common).
+          make download -j$(nproc) || { echo "Retrying..."; sleep 60; make download -j1 V=s; }
 
-      - name: Build OpenWrt
+      - name: Run make world
         working-directory: ${{ runner.temp }}/openwrt
-        env:
-          FORCE_UNSAFE_CONFIGURE: 1
-          TAR_OPTIONS: --no-same-owner
-          LC_ALL: C
         run: |
+          # Mirror build output to a log file so the failure healthcheck can
+          # send the tail to healthchecks.io.
           exec > >(tee /tmp/openwrt-build.log) 2>&1
-          make -j$(nproc) || {
-            echo "Retrying..."
-            sleep 60
-            make -j1 V=s
-          }
+          make -j$(nproc) || { echo "Retrying..."; sleep 60; make -j1 V=s; }
 
-      - name: Extract imagebuilder tarball
+      - name: Extract ImageBuilder tarball
         run: |
           TARBALL=$(find ${{ runner.temp }}/openwrt/bin -name "*imagebuilder*.tar.*" | head -1)
           echo "Found: $TARBALL"
           cp "$TARBALL" "$GITHUB_WORKSPACE/"
           ls -lh "$GITHUB_WORKSPACE/"*imagebuilder*.tar.*
 
-      - name: Collect packages and target metadata
+      - name: Stage packages and target metadata for publish
         run: |
           set -euo pipefail
           OPENWRT="${{ runner.temp }}/openwrt"
@@ -432,18 +408,13 @@ jobs:
           TARGET="mediatek/filogic"
           STAGING="${{ runner.temp }}/pkg-staging"
 
-          # Staging layout matches the ASU-expected on-disk structure under
-          # releases/{version}/ so the publish step is a plain rsync into
-          # the releases branch:
+          # Match the on-disk layout ASU expects under releases/{version}/
+          # so the publish step is a plain rsync into the releases branch:
           #
           #   packages/${ARCH}/feeds.conf                — feed name list
           #   packages/${ARCH}/{feed}/{index.json,*.apk} — per-feed APK feed
           #   targets/${TARGET}/{profiles.json,*.manifest,*.buildinfo,sha256sums}
           #   targets/${TARGET}/packages/{index.json,*.apk}  — target kmods
-          #
-          # ASU fetches packages from {upstream_url}/{path}/packages/{arch}/... and
-          # target kmods from {upstream_url}/{path}/targets/{target}/packages/ —
-          # where {path} is "releases/{version}" per branches.json.
           PKG_BASE=$(find "${OPENWRT}/bin" -type d -path "*packages/${ARCH}" | head -1)
           TARGET_BASE=$(find "${OPENWRT}/bin" -type d -path "*targets/${TARGET}" | head -1)
 
@@ -544,37 +515,40 @@ jobs:
           curl -fsSL "${MANIFEST_URL}" | awk '{print $1}' | sort -u > "$GITHUB_WORKSPACE/firmware-packages.txt"
           echo "Packages in manifest: $(wc -l < "$GITHUB_WORKSPACE/firmware-packages.txt")"
 
-      - name: Upload firmware-packages artifact
+      # Four artifacts are uploaded separately so `containerize` can pull
+      # each by name without unpacking an aggregate bundle.
+      - name: Upload artifact — firmware-packages
         uses: actions/upload-artifact@v5
         with:
           name: firmware-packages
           path: firmware-packages.txt
           retention-days: 1
 
-      - name: Upload profiles.json artifact
+      - name: Upload artifact — profiles.json
         uses: actions/upload-artifact@v5
         with:
           name: profiles-json
           path: ${{ runner.temp }}/pkg-staging/targets/mediatek/filogic/profiles.json
           retention-days: 1
 
-      - name: Upload imagebuilder tarball as artifact
+      - name: Upload artifact — ImageBuilder tarball
         uses: actions/upload-artifact@v5
         with:
           name: imagebuilder-tarball
           path: "*imagebuilder*.tar.*"
           retention-days: 1
 
-      - name: Upload packages artifact
+      - name: Upload artifact — packages-staging
         uses: actions/upload-artifact@v5
         with:
           name: packages-staging
           path: packages-staging.tar.gz
           retention-days: 1
 
-      - name: Cleanup openwrt build dir
+      - name: Clean up OpenWrt build dir (preserve dl/ for cache)
         run: |
-          # Preserve dl/ for actions/cache post-step, remove everything else
+          # actions/cache's post-step needs dl/ to still exist at its declared
+          # path. Everything else can go to free the runner.
           if [ -d "${{ runner.temp }}/openwrt/dl" ] && [ ! -L "${{ runner.temp }}/openwrt/dl" ]; then
             mv "${{ runner.temp }}/openwrt/dl" "${{ runner.temp }}/openwrt-dl-cache"
           fi
@@ -584,9 +558,11 @@ jobs:
             mv "${{ runner.temp }}/openwrt-dl-cache" "${{ runner.temp }}/openwrt/dl"
           fi
 
-      - name: Ping healthcheck failure with log
+      - name: Healthcheck — fail (with build log tail)
         if: failure()
         run: |
+          # Tolerate failure: don't let a healthcheck ping outage mask the
+          # real build failure we're trying to report.
           LOG_TAIL=$(tail -c 8000 /tmp/openwrt-build.log 2>/dev/null || echo "No build log captured")
           curl -fsS -m 10 --retry 3 \
             --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
@@ -603,22 +579,22 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      - name: Download imagebuilder tarball
+      - name: Download artifact — ImageBuilder tarball
         uses: actions/download-artifact@v5
         with:
           name: imagebuilder-tarball
 
-      - name: Download packages artifact
+      - name: Download artifact — packages-staging
         uses: actions/download-artifact@v5
         with:
           name: packages-staging
 
-      - name: Download firmware-packages artifact into build context
+      - name: Download artifact — firmware-packages (into build context)
         uses: actions/download-artifact@v5
         with:
+          # Land at repo root so the Containerfile's COPY picks it up,
+          # overwriting the committed fallback used by build-firmware.yml.
           name: firmware-packages
-          # Land at repo root so the Containerfile's COPY picks it up;
-          # overwrites the committed fallback used by build-firmware.yml.
           path: .
 
       - name: Publish packages and metadata to releases branch
@@ -636,12 +612,9 @@ jobs:
             "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
             /tmp/releases-branch
 
-          # Publish under {version}/ at the branch root — the path
-          # branches.json tells ASU to consume. The branch itself is named
-          # 'releases', so the raw.githubusercontent.com URL already contains
-          # one /releases/ (the branch); nesting another releases/ directory
-          # inside would duplicate it in every URL. Wipe first so stale
-          # files don't linger across rebuilds.
+          # Publish at the branch root under {version}/ — branches.json
+          # tells ASU to consume the same path. Wipe first so stale files
+          # don't linger across rebuilds.
           rm -rf "/tmp/releases-branch/${VERSION}"
           mkdir -p "/tmp/releases-branch/${VERSION}"
           cp -a /tmp/pkg-staging/. "/tmp/releases-branch/${VERSION}/"
@@ -653,6 +626,7 @@ jobs:
           git diff --cached --quiet && echo "No changes" && exit 0
           git commit -m "ci: publish packages and metadata for ${VERSION}"
 
+          # Retry with rebase to survive concurrent pushes to releases.
           for i in 1 2 3; do
             git push origin releases && break
             echo "Push failed (attempt $i), retrying..."
@@ -678,7 +652,7 @@ jobs:
           TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${ASU_VER}"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
-      - name: Build and push (${{ needs.discover.outputs.branch }})
+      - name: Build and push ImageBuilder container
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -711,9 +685,10 @@ jobs:
       # (staged under releases/{version}/targets/mediatek/filogic/) so no
       # separate API PUT is needed.
 
-      - name: Ping healthcheck failure
+      - name: Healthcheck — fail (containerize)
         if: failure()
         run: |
+          # Tolerate failure (see start ping for rationale).
           curl -fsS -m 10 --retry 3 \
             --data-binary "Containerize failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
             "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true

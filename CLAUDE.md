@@ -62,7 +62,16 @@ These look interchangeable and aren't. Both get written into the firmware rootfs
 
 ### distfeeds.list generation is make-time, not overlay-compatible
 
-`include/feeds.mk`'s `FeedSourcesAppendAPK` + `VERSION_SED_SCRIPT` runs from `package/base-files/Makefile` during the rootfs install step of `make image` (at ASU worker time). It *overwrites* `/etc/apk/repositories.d/distfeeds.list` even if one was pre-seeded via the IB's `files/` overlay. Shipping a correct distfeeds.list means controlling the template (the Containerfile's sed on `include/feeds.mk`) and `CONFIG_VERSION_REPO`, not writing a rootfs file.
+`include/feeds.mk`'s `FeedSourcesAppendAPK` + `VERSION_SED_SCRIPT` runs from `package/base-files/Makefile` during the rootfs install step of `make image` (at ASU worker time). It *overwrites* `/etc/apk/repositories.d/distfeeds.list` even if one was pre-seeded via the IB's `files/` overlay. Shipping a correct distfeeds.list means controlling the template (patched in `build-imagebuilder.yml` before `make world`) and `CONFIG_VERSION_REPO`, not writing a rootfs file.
+
+### Build-time apk feeds vs runtime distfeeds
+
+Two files, same template, different lifecycles:
+
+- **`$(TOPDIR)/repositories`** — generated at `make world` (step 1) by `target/imagebuilder/Makefile:49`. Consumed at `make image` (ASU worker) time by the `APK` invocation in `target/imagebuilder/files/Makefile:100-104`, but **only** if `CONFIG_IB_STANDALONE` is unset; when set, apk sees only `--repository $(PACKAGE_DIR)/packages.adb` (the local mirror) and `make image` fails for any package not locally built (nano, git, …). We deliberately leave `CONFIG_IB_STANDALONE` unset so apk falls through to pesa's `$(OWRT_LINK)` upstream snapshots for anything we don't mirror.
+- **`/etc/apk/repositories.d/distfeeds.list`** (firmware runtime) — generated at `make image` time by `package/base-files/Makefile`. Same `FeedSourcesAppendAPK` template, expanded at a later stage. Governs on-device `apk update && apk install`.
+
+Both files share `include/feeds.mk`'s template, so the feeds.mk sed has to land **before** `make world` to cleanly fix both surfaces.
 
 ## Containerfile details
 
@@ -70,7 +79,7 @@ The `Containerfile` in this repo is **stage 2** (slim runtime). The build contex
 
 - Patches `apk-mbedtls → apk-openssl`, `libustream-mbedtls → libustream-openssl`, `wpad-basic-mbedtls → wpad-openssl` in three files. Pesa's config uses the openssl variants, but upstream OpenWrt's default-packages lists still reference mbedtls — without these patches, ImageBuilder output references packages that weren't actually compiled.
 - **Appends `firmware-packages.txt` to `DEFAULT_PACKAGES`** in `include/default-packages.mk`, so `make image PROFILE=X` with no `PACKAGES=` argument produces a rootfs matching pesa's manifest (LuCI, kmods, the works). Since the manifest comes from the same release whose `config.buildinfo` drove the build, every package in the list is guaranteed to exist in the IB's package repo — `make image` can't fail on a missing name.
-- **Strips pesa's `$(DATE)_$(VERSION_CODE)_$(BRANCH)/` segment from `include/feeds.mk`'s `FeedSourcesAppendAPK` template**. Pesa's `next-r*` branches patch that template to emit `%U/$(DATE)_$(VERSION_CODE)_$(BRANCH)/targets/%S/packages/packages.adb` so the rendered URL points at `MT6000_cust_build/<release_dir>/targets/…`. That segment leaks into any downstream build that links against pesa's tree — including ours, where `$(BRANCH)` resolves to literal `HEAD` due to detached-HEAD checkout. We drop it so firmware `/etc/apk/repositories.d/distfeeds.list` resolves to `%U/targets/%S/packages/packages.adb`, which combined with `CONFIG_VERSION_REPO=https://raw.githubusercontent.com/Ogglord/openwrt-imagebuilder-mt6000/releases/<X.Y>-SNAPSHOT` lands exactly on the `releases`-branch layout. The Containerfile aborts if the expected template segment is not found, so silent drift from upstream is caught.
+- **Refuses IB tarballs that haven't had pesa's `$(DATE)_$(VERSION_CODE)_$(BRANCH)/` template segment stripped from `include/feeds.mk`**. The strip itself happens at step 1 in `build-imagebuilder.yml` before `make world`, because `$(TOPDIR)/repositories` (the apk repository list used at `make image` time) is generated during `make world` by `target/imagebuilder/Makefile` via the same `FeedSourcesAppendAPK` template. Stripping the template post-hoc in this Containerfile would only fix the firmware's runtime `distfeeds.list`, not the IB's build-time feed list. Combined with `CONFIG_VERSION_REPO=https://raw.githubusercontent.com/Ogglord/openwrt-imagebuilder-mt6000/releases/<X.Y>-SNAPSHOT`, both `repositories` and `distfeeds.list` resolve to `%U/targets/%S/packages/packages.adb` → the `releases`-branch layout.
 - Replaces `setup.sh` with a no-op (ASU calls this for snapshot builds; upstream's version refreshes feeds, but our tree is fully pre-built).
 - Runs as uid/gid 1000 `buildbot`. The upstream Ubuntu image's default `ubuntu` user (also uid 1000) is deleted first.
 

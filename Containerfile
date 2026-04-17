@@ -26,17 +26,13 @@ RUN mkdir -p /builder && \
       -e 's/CONFIG_DEFAULT_libustream-mbedtls=y/CONFIG_DEFAULT_libustream-openssl=y/' \
       -e 's/CONFIG_DEFAULT_wpad-basic-mbedtls=y/CONFIG_DEFAULT_wpad-openssl=y/' \
       /builder/.config && \
-    # Strip pesa's RELEASE_DIR segment from the apk distfeeds template so the
-    # generated /etc/apk/repositories.d/distfeeds.list resolves against the
-    # releases-branch layout (CONFIG_VERSION_REPO/{version}-SNAPSHOT/targets/...).
-    # Pesa's next-r* branches patch FeedSourcesAppendAPK in include/feeds.mk to
-    # emit '%U/$(DATE)_$(VERSION_CODE)_$(BRANCH)/targets/%S/packages/packages.adb'
-    # — fine for his MT6000_cust_build layout, wrong for ours.
+    # Refuse to run against an IB tarball that still has pesa's RELEASE_DIR
+    # segment in its distfeeds template — step 1 of our CI is supposed to strip
+    # it from include/feeds.mk before make world so $(TOPDIR)/repositories (also
+    # baked at step 1) gets the clean URL. This check catches tarballs built
+    # without that patch.
     if grep -q '$(DATE)_$(VERSION_CODE)_$(BRANCH)/targets' /builder/include/feeds.mk; then \
-      sed -i 's|$(DATE)_$(VERSION_CODE)_$(BRANCH)/||g' /builder/include/feeds.mk; \
-      echo "Stripped pesa RELEASE_DIR segment from include/feeds.mk"; \
-    else \
-      echo "ERROR: pesa RELEASE_DIR segment not found in include/feeds.mk — template may have changed" >&2; \
+      echo "ERROR: IB tarball still has pesa RELEASE_DIR template in include/feeds.mk — rebuild with build-imagebuilder.yml's feeds.mk sed in place" >&2; \
       exit 1; \
     fi
 

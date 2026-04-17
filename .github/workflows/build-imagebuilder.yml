@@ -42,19 +42,21 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Derive ASU X.Y version from pesa branch name
-          # next-r4.7.4.rss.mtk → 4.7, next-r4.8.0.rss.mtk → 4.8
-          # Test branches (containing -test) still get an ASU version — the
-          # config.buildinfo pipeline doesn't care about test-ness, only
-          # that a release dir exists for the branch.
+          # Derive ASU X.Y version from pesa branch name, treating test
+          # branches as aliases of their base release series:
+          #   next-r4.7.4.rss.mtk            → 4.7
+          #   next-r4.8.0.rss.mtk            → 4.8
+          #   next-r4.8.0.rss.mtk-test6.18   → 4.8
+          # A force-built test branch therefore publishes under the same
+          # `<X.Y>-SNAPSHOT` tag/path as its non-test sibling (latest
+          # forced build wins).
           derive_asu_version() {
-            local branch="$1"
-            if [[ "$branch" == *"-test"* ]]; then
-              echo "SKIP"
-              return
-            fi
-            echo "$branch" | sed 's/^next-r//' | cut -d. -f1,2
+            echo "$1" | sed 's/^next-r//' | cut -d. -f1,2
           }
+
+          # Test branches are still skipped on scheduled runs — we only
+          # pick them up via explicit `force_branch`.
+          is_test_branch() { [[ "$1" == *"-test"* ]]; }
 
           # List pesa's release directories (shared by both code paths below)
           DIRS=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
@@ -111,7 +113,7 @@ jobs:
           fi
 
           ASU_VER=$(derive_asu_version "$BRANCH")
-          if [[ "$ASU_VER" == "SKIP" && -z "${FORCE_BRANCH:-}" ]]; then
+          if is_test_branch "$BRANCH" && [[ -z "${FORCE_BRANCH:-}" ]]; then
             echo "::warning::Latest branch is a test branch (${BRANCH}) — skipping scheduled run"
             echo "new_commits=false" >> "$GITHUB_OUTPUT"
             exit 0
@@ -247,18 +249,15 @@ jobs:
           echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config
           make defconfig
-          # Set version to the branch name so firmware reports a specific version
-          # instead of "SNAPSHOT". This allows ASU to resolve the correct
-          # imagebuilder container tag without custom patches.
+          # Set version to the ASU X.Y-SNAPSHOT so firmware reports a
+          # stable identifier that ASU can resolve to the matching
+          # imagebuilder container tag without custom patches. Test
+          # branches share the version with their base series (see the
+          # discover job's derive_asu_version).
           # Done after defconfig so it cannot be overridden by defaults.
           ASU_VER="${{ needs.discover.outputs.asu_version }}"
           sed -i '/^CONFIG_VERSION_NUMBER=/d' .config
-          if [[ "$ASU_VER" != "SKIP" ]]; then
-            echo "CONFIG_VERSION_NUMBER=\"${ASU_VER}-SNAPSHOT\"" >> .config
-          else
-            # Test branch: use pesa branch name as version
-            echo "CONFIG_VERSION_NUMBER=\"${{ needs.discover.outputs.branch }}\"" >> .config
-          fi
+          echo "CONFIG_VERSION_NUMBER=\"${ASU_VER}-SNAPSHOT\"" >> .config
           sed -i '/^CONFIG_VERSION_REPO=/d' .config
           echo 'CONFIG_VERSION_REPO="https://github.com/Ogglord/openwrt-imagebuilder-mt6000"' >> .config
           # Pin CONFIG_VERSION_CODE to pesa's actual revision instead of
@@ -623,7 +622,6 @@ jobs:
           path: .
 
       - name: Publish packages and metadata to releases branch
-        if: needs.discover.outputs.asu_version != 'SKIP'
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -675,11 +673,9 @@ jobs:
       - name: Compute container tags
         id: tags
         run: |
-          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}"
           ASU_VER="${{ needs.discover.outputs.asu_version }}"
-          if [[ "$ASU_VER" != "SKIP" ]]; then
-            TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${ASU_VER}"
-          fi
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}"
+          TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${ASU_VER}"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Build and push (${{ needs.discover.outputs.branch }})

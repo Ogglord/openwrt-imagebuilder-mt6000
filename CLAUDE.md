@@ -43,7 +43,7 @@ This is the critical invariant — the naming must match what the ASU server exp
 
 ASU's `get_branch()` does `rsplit("-", 1)[0]` on the version to get the branch key, and `get_container_version_tag()` strips `-SNAPSHOT` and prepends `openwrt-` to get the image tag. Don't touch the version string or container tag format without changing both sides.
 
-Release-series branches (e.g. `next-r4.8.x.rss.mtk`) derive an ASU X.Y version via `sed 's/^next-r//' | cut -d. -f1,2` (→ `4.8`). Test branches (containing `-test`) skip this and use the branch name directly as the version — they're manual-only.
+Branches derive an ASU X.Y version via `sed 's/^next-r//' | cut -d. -f1,2` (→ `4.8` for `next-r4.8.0.rss.mtk` and `next-r4.8.0.rss.mtk-test6.18` alike). Test branches (containing `-test`) are skipped on scheduled runs but can be force-built and will publish under the same `<X.Y>-SNAPSHOT` tag/path as their non-test sibling — latest forced build wins.
 
 ## Containerfile details
 

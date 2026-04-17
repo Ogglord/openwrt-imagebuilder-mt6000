@@ -47,6 +47,23 @@ ASU's `get_branch()` does `rsplit("-", 1)[0]` on the version to get the branch k
 
 Branches derive an ASU X.Y version via `sed 's/^next-r//' | cut -d. -f1,2` (→ `4.8` for `next-r4.8.0.rss.mtk` and `next-r4.8.0.rss.mtk-test6.18` alike). Test and non-test branches that collapse to the same `<X.Y>` publish to the same `-SNAPSHOT` tag/path — latest build wins.
 
+### OpenWrt version variables — `REVISION` vs `VERSION_CODE`
+
+These look interchangeable and aren't. Both get written into the firmware rootfs, via different sed substitutions in `VERSION_SED_SCRIPT` (`include/version.mk`):
+
+| Var | Source | Sed slot | Ends up in |
+|---|---|---|---|
+| `VERSION_CODE` | `CONFIG_VERSION_CODE`, falls back to `$(REVISION)` | `%C` / `%c` | `DISTRIB_DESCRIPTION`, APK feed URLs (`$(VERSION_CODE)` in pesa's `include/feeds.mk`) |
+| `REVISION` | `scripts/getver.sh` — *only* | `%R` | `DISTRIB_REVISION` in `/etc/openwrt_release` |
+
+`CONFIG_VERSION_CODE` does **not** drive `REVISION`, only the other way around (fallback). Pinning `CONFIG_VERSION_CODE` alone fixes feed URLs and `DISTRIB_DESCRIPTION` but leaves `DISTRIB_REVISION` with whatever `getver.sh` produced.
+
+**Shallow-clone trap**: our `build` job does a depth-1 fetch of a specific commit (byte-for-byte parity with pesa's release). `getver.sh`'s git path counts commits via `git rev-list REBOOT..HEAD` where `REBOOT=ee53a240…` (a 2019 commit), and on a shallow clone that range is empty → output is `r0-<7-char-sha>`. `getver.sh` has an escape hatch: `try_version()` reads from a `TOPDIR/version` file and short-circuits before the git path, so we write the parsed `rREV-HASH` there before `make world` — see `build-imagebuilder.yml:267-287`. Do not remove the `version` file write without first removing the depth-1 fetch.
+
+### distfeeds.list generation is make-time, not overlay-compatible
+
+`include/feeds.mk`'s `FeedSourcesAppendAPK` + `VERSION_SED_SCRIPT` runs from `package/base-files/Makefile` during the rootfs install step of `make image` (at ASU worker time). It *overwrites* `/etc/apk/repositories.d/distfeeds.list` even if one was pre-seeded via the IB's `files/` overlay. Shipping a correct distfeeds.list means controlling the template (the Containerfile's sed on `include/feeds.mk`) and `CONFIG_VERSION_REPO`, not writing a rootfs file.
+
 ## Containerfile details
 
 The `Containerfile` in this repo is **stage 2** (slim runtime). The build context is the repo root plus two CI-injected files: `*imagebuilder*.tar.*` (the compiled IB from the `build` job) and `firmware-packages.txt` (pesa's manifest for the same release, also from the `build` job). Both are downloaded as artifacts by the `containerize` job before `docker build` runs.

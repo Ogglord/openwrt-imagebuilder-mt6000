@@ -45,22 +45,37 @@ RUN if [ -s /tmp/firmware-packages.txt ]; then \
     rm -f /tmp/firmware-packages.txt && \
     chown -R buildbot:buildbot /builder
 
-# Patch APK repositories to point to our signed package feed so firmware
-# built by ASU uses our repo instead of pesa1234's for post-flash installs.
-ARG PACKAGES_BASE_URL=""
-RUN if [ -n "${PACKAGES_BASE_URL}" ]; then \
-      REPOS_FILE=$(find /builder -maxdepth 1 -name "repositories.conf" -o -name "repositories" 2>/dev/null | head -1); \
-      if [ -n "${REPOS_FILE}" ]; then \
-        echo "Patching ${REPOS_FILE} with ${PACKAGES_BASE_URL}"; \
-        cat "${REPOS_FILE}"; \
-        echo "---"; \
-        sed -i "s|https://raw.githubusercontent.com/pesa1234/MT6000_cust_build[^ ]*|${PACKAGES_BASE_URL}|g" \
-          "${REPOS_FILE}" && \
-        cat "${REPOS_FILE}"; \
-      else \
-        echo "WARNING: No repositories config found in /builder — listing candidates:"; \
-        find /builder -maxdepth 3 -name "repositories*" -o -name "distfeeds*" 2>/dev/null || true; \
+# Rewrite the ImageBuilder's apk repositories.conf to list our mirror on
+# the releases branch first, then OpenWrt snapshots as upstream fallback.
+# This file is copied verbatim into the built firmware as
+# /etc/apk/repositories.d/distfeeds.list, so `apk add <pkg>` post-flash
+# resolves via our feed first, then falls through to upstream for
+# anything we don't mirror (bash, nano, git, ...). Replaces the previous
+# sed-patch approach: pesa's repositories actually used `github.com/...`
+# (not `raw.githubusercontent.com/...`), so the old regex never matched
+# and the resulting distfeeds.list line 1 was a dead URL.
+ARG REPO_VERSION_URL=""
+RUN if [ -n "${REPO_VERSION_URL}" ]; then \
+      set -eu; \
+      ARCH="aarch64_cortex-a53"; \
+      TARGET="mediatek/filogic"; \
+      REPOS_FILE=$(find /builder -maxdepth 1 \( -name "repositories.conf" -o -name "repositories" \) 2>/dev/null | head -1); \
+      if [ -z "${REPOS_FILE}" ]; then \
+        echo "ERROR: No repositories config found in /builder — candidates:"; \
+        find /builder -maxdepth 3 \( -name "repositories*" -o -name "distfeeds*" \) 2>/dev/null || true; \
+        exit 1; \
       fi; \
+      echo "--- ${REPOS_FILE} before ---"; cat "${REPOS_FILE}"; \
+      { \
+        echo "${REPO_VERSION_URL}/targets/${TARGET}/packages/packages.adb"; \
+        for feed in base luci packages routing; do \
+          echo "${REPO_VERSION_URL}/packages/${ARCH}/${feed}/packages.adb"; \
+        done; \
+        for feed in base luci packages routing telephony video; do \
+          echo "https://downloads.openwrt.org/snapshots/packages/${ARCH}/${feed}/packages.adb"; \
+        done; \
+      } > "${REPOS_FILE}"; \
+      echo "--- ${REPOS_FILE} after ---"; cat "${REPOS_FILE}"; \
     fi
 
 # ASU runs `setup.sh` for snapshot builds. Upstream imagebuilders ship one

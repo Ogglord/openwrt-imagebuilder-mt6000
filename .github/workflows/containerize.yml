@@ -1,0 +1,216 @@
+name: Containerize
+run-name: "Containerize — ${{ github.event.workflow_run.display_title || inputs.build_run_id || 'latest successful build' }}"
+
+# Split out of build-imagebuilder.yml so the ~2min container step can be
+# re-run independently of the ~40min `make world`. Two triggers:
+#
+#  - workflow_run on a successful Build ImageBuilder run → auto-containerize
+#    with artifacts from that run.
+#  - workflow_dispatch → manual, takes an optional build_run_id; empty
+#    means "latest successful Build ImageBuilder run".
+on:
+  workflow_run:
+    workflows: ["Build ImageBuilder"]
+    types: [completed]
+  workflow_dispatch:
+    inputs:
+      build_run_id:
+        description: "Build run ID to containerize (blank = latest successful)"
+        required: false
+        type: string
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ogglord/openwrt-imagebuilder
+
+jobs:
+  containerize:
+    # Skip the auto-trigger if the underlying build failed — manual dispatch
+    # always proceeds (the resolve step will fail loudly if there's nothing
+    # to pull).
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'workflow_run' && github.event.workflow_run.conclusion == 'success')
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+      packages: write
+      actions: read
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Resolve build run ID
+        id: resolve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EVENT_NAME: ${{ github.event_name }}
+          WORKFLOW_RUN_ID: ${{ github.event.workflow_run.id }}
+          INPUT_RUN_ID: ${{ inputs.build_run_id }}
+        run: |
+          set -euo pipefail
+          case "$EVENT_NAME" in
+            workflow_run)
+              RUN_ID="$WORKFLOW_RUN_ID"
+              echo "Auto-triggered by Build ImageBuilder run: $RUN_ID" ;;
+            workflow_dispatch)
+              if [[ -n "${INPUT_RUN_ID:-}" ]]; then
+                RUN_ID="$INPUT_RUN_ID"
+                echo "Using user-supplied build_run_id: $RUN_ID"
+              else
+                RUN_ID=$(gh run list --repo "${{ github.repository }}" \
+                  --workflow build-imagebuilder.yml --status success \
+                  --limit 1 --json databaseId --jq '.[0].databaseId')
+                echo "Resolved latest successful build_run_id: $RUN_ID"
+              fi ;;
+          esac
+          if [[ -z "${RUN_ID:-}" ]]; then
+            echo "::error::Could not resolve a build run id"
+            exit 1
+          fi
+          echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+
+      - name: Download artifact — ImageBuilder tarball
+        uses: actions/download-artifact@v5
+        with:
+          name: imagebuilder-tarball
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download artifact — packages-staging
+        uses: actions/download-artifact@v5
+        with:
+          name: packages-staging
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download artifact — firmware-packages (into build context)
+        uses: actions/download-artifact@v5
+        with:
+          # Land at repo root so the Containerfile's COPY picks it up,
+          # overwriting the committed fallback used by build-firmware.yml.
+          name: firmware-packages
+          path: .
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Download artifact — build-meta
+        uses: actions/download-artifact@v5
+        with:
+          name: build-meta
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+
+      - name: Load build metadata
+        id: meta
+        run: |
+          set -euo pipefail
+          test -f build-meta.json || { echo "::error::build-meta.json missing from artifact"; exit 1; }
+          cat build-meta.json
+          jq -r '"branch=" + .branch,
+                 "asu_version=" + .asu_version,
+                 "commit_sha=" + .commit_sha,
+                 "release_dir=" + .release_dir' build-meta.json >> "$GITHUB_OUTPUT"
+
+      - name: Publish packages and metadata to releases branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          ASU_VERSION: ${{ steps.meta.outputs.asu_version }}
+        run: |
+          set -euo pipefail
+          VERSION="${ASU_VERSION}-SNAPSHOT"
+
+          rm -rf /tmp/pkg-staging /tmp/releases-branch
+          mkdir -p /tmp/pkg-staging
+          tar -xzf packages-staging.tar.gz -C /tmp/pkg-staging
+
+          git clone --depth=1 --branch=releases \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            /tmp/releases-branch
+
+          # Publish at the branch root under {version}/ — branches.json
+          # tells ASU to consume the same path. Wipe first so stale files
+          # don't linger across rebuilds.
+          rm -rf "/tmp/releases-branch/${VERSION}"
+          mkdir -p "/tmp/releases-branch/${VERSION}"
+          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/${VERSION}/"
+
+          cd /tmp/releases-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add "${VERSION}/"
+          git diff --cached --quiet && echo "No changes" && exit 0
+          git commit -m "ci: publish packages and metadata for ${VERSION}"
+
+          # Retry with rebase to survive concurrent pushes to releases.
+          for i in 1 2 3; do
+            git push origin releases && break
+            echo "Push failed (attempt $i), retrying..."
+            sleep 10
+            git pull --rebase origin releases
+          done
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Compute container tags
+        id: tags
+        env:
+          BRANCH: ${{ steps.meta.outputs.branch }}
+          ASU_VER: ${{ steps.meta.outputs.asu_version }}
+        run: |
+          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${BRANCH}"
+          TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${ASU_VER}"
+          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
+
+      - name: Build and push ImageBuilder container
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: ./Containerfile
+          push: true
+          build-args: |
+            REPO_VERSION_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/${{ steps.meta.outputs.asu_version }}-SNAPSHOT
+          tags: ${{ steps.tags.outputs.tags }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Create release to record built commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH: ${{ steps.meta.outputs.branch }}
+          COMMIT_SHA: ${{ steps.meta.outputs.commit_sha }}
+          ASU_VERSION: ${{ steps.meta.outputs.asu_version }}
+        run: |
+          TAG="mediatek-filogic-${BRANCH}"
+          gh release delete "${TAG}" --cleanup-tag -y --repo "${{ github.repository }}" 2>/dev/null || true
+          VERSION="${ASU_VERSION}-SNAPSHOT"
+          gh release create "${TAG}" \
+            --repo "${{ github.repository }}" \
+            --title "ImageBuilder: ${BRANCH}" \
+            --notes "**Branch:** ${BRANCH}
+          **Commit:** ${COMMIT_SHA}
+          **Version:** ${VERSION}
+          **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
+          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/${VERSION}/packages/" \
+            packages-staging.tar.gz
+
+      # profiles.json is already included in the git-based publish above
+      # (staged under releases/{version}/targets/mediatek/filogic/) so no
+      # separate API PUT is needed.
+
+      - name: Healthcheck — fail (containerize)
+        if: failure()
+        run: |
+          # Tolerate failure (see start ping in build-imagebuilder.yml).
+          curl -fsS -m 10 --retry 3 \
+            --data-binary "Containerize failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
+            "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true

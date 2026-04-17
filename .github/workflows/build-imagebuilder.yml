@@ -522,28 +522,54 @@ jobs:
         with:
           name: firmware-packages
           path: firmware-packages.txt
-          retention-days: 1
+          retention-days: 14
 
       - name: Upload artifact — profiles.json
         uses: actions/upload-artifact@v5
         with:
           name: profiles-json
           path: ${{ runner.temp }}/pkg-staging/targets/mediatek/filogic/profiles.json
-          retention-days: 1
+          retention-days: 14
 
       - name: Upload artifact — ImageBuilder tarball
         uses: actions/upload-artifact@v5
         with:
           name: imagebuilder-tarball
           path: "*imagebuilder*.tar.*"
-          retention-days: 1
+          retention-days: 14
 
       - name: Upload artifact — packages-staging
         uses: actions/upload-artifact@v5
         with:
           name: packages-staging
           path: packages-staging.tar.gz
-          retention-days: 1
+          retention-days: 14
+
+      - name: Write build-meta.json
+        env:
+          BRANCH: ${{ needs.discover.outputs.branch }}
+          ASU_VERSION: ${{ needs.discover.outputs.asu_version }}
+          COMMIT_SHA: ${{ needs.discover.outputs.commit_sha }}
+          RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
+        run: |
+          # Ship discover outputs alongside the other artifacts so the
+          # containerize workflow (separate file, possibly re-run later)
+          # doesn't have to re-derive them.
+          jq -n \
+            --arg branch      "$BRANCH" \
+            --arg asu_version "$ASU_VERSION" \
+            --arg commit_sha  "$COMMIT_SHA" \
+            --arg release_dir "$RELEASE_DIR" \
+            '{branch:$branch, asu_version:$asu_version, commit_sha:$commit_sha, release_dir:$release_dir}' \
+            > "$GITHUB_WORKSPACE/build-meta.json"
+          cat "$GITHUB_WORKSPACE/build-meta.json"
+
+      - name: Upload artifact — build-meta
+        uses: actions/upload-artifact@v5
+        with:
+          name: build-meta
+          path: build-meta.json
+          retention-days: 14
 
       - name: Clean up OpenWrt build dir (preserve dl/ for cache)
         run: |
@@ -568,127 +594,7 @@ jobs:
             --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
             "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
 
-  containerize:
-    needs: [discover, build]
-    runs-on: ${{ inputs.runner || 'ubuntu-latest' }}
-    timeout-minutes: 30
-    permissions:
-      contents: write
-      packages: write
-
-    steps:
-      - uses: actions/checkout@v5
-
-      - name: Download artifact — ImageBuilder tarball
-        uses: actions/download-artifact@v5
-        with:
-          name: imagebuilder-tarball
-
-      - name: Download artifact — packages-staging
-        uses: actions/download-artifact@v5
-        with:
-          name: packages-staging
-
-      - name: Download artifact — firmware-packages (into build context)
-        uses: actions/download-artifact@v5
-        with:
-          # Land at repo root so the Containerfile's COPY picks it up,
-          # overwriting the committed fallback used by build-firmware.yml.
-          name: firmware-packages
-          path: .
-
-      - name: Publish packages and metadata to releases branch
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set -euo pipefail
-          VERSION="${{ needs.discover.outputs.asu_version }}-SNAPSHOT"
-
-          rm -rf /tmp/pkg-staging /tmp/releases-branch
-          mkdir -p /tmp/pkg-staging
-          tar -xzf packages-staging.tar.gz -C /tmp/pkg-staging
-
-          git clone --depth=1 --branch=releases \
-            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
-            /tmp/releases-branch
-
-          # Publish at the branch root under {version}/ — branches.json
-          # tells ASU to consume the same path. Wipe first so stale files
-          # don't linger across rebuilds.
-          rm -rf "/tmp/releases-branch/${VERSION}"
-          mkdir -p "/tmp/releases-branch/${VERSION}"
-          cp -a /tmp/pkg-staging/. "/tmp/releases-branch/${VERSION}/"
-
-          cd /tmp/releases-branch
-          git config user.name "github-actions[bot]"
-          git config user.email "github-actions[bot]@users.noreply.github.com"
-          git add "${VERSION}/"
-          git diff --cached --quiet && echo "No changes" && exit 0
-          git commit -m "ci: publish packages and metadata for ${VERSION}"
-
-          # Retry with rebase to survive concurrent pushes to releases.
-          for i in 1 2 3; do
-            git push origin releases && break
-            echo "Push failed (attempt $i), retrying..."
-            sleep 10
-            git pull --rebase origin releases
-          done
-
-      - name: Set up Docker Buildx
-        uses: docker/setup-buildx-action@v3
-
-      - name: Log in to GHCR
-        uses: docker/login-action@v3
-        with:
-          registry: ghcr.io
-          username: ${{ github.actor }}
-          password: ${{ secrets.GITHUB_TOKEN }}
-
-      - name: Compute container tags
-        id: tags
-        run: |
-          ASU_VER="${{ needs.discover.outputs.asu_version }}"
-          TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${{ needs.discover.outputs.branch }}"
-          TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${ASU_VER}"
-          echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
-
-      - name: Build and push ImageBuilder container
-        uses: docker/build-push-action@v6
-        with:
-          context: .
-          file: ./Containerfile
-          push: true
-          build-args: |
-            REPO_VERSION_URL=https://raw.githubusercontent.com/${{ github.repository }}/releases/${{ needs.discover.outputs.asu_version }}-SNAPSHOT
-          tags: ${{ steps.tags.outputs.tags }}
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
-
-      - name: Create release to record built commit
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          TAG="mediatek-filogic-${{ needs.discover.outputs.branch }}"
-          gh release delete "${TAG}" --cleanup-tag -y --repo "${{ github.repository }}" 2>/dev/null || true
-          VERSION="${{ needs.discover.outputs.asu_version }}-SNAPSHOT"
-          gh release create "${TAG}" \
-            --repo "${{ github.repository }}" \
-            --title "ImageBuilder: ${{ needs.discover.outputs.branch }}" \
-            --notes "**Branch:** ${{ needs.discover.outputs.branch }}
-          **Commit:** ${{ needs.discover.outputs.commit_sha }}
-          **Version:** ${VERSION}
-          **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
-          **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/${VERSION}/packages/" \
-            packages-staging.tar.gz
-
-      # profiles.json is already included in the git-based publish above
-      # (staged under releases/{version}/targets/mediatek/filogic/) so no
-      # separate API PUT is needed.
-
-      - name: Healthcheck — fail (containerize)
-        if: failure()
-        run: |
-          # Tolerate failure (see start ping for rationale).
-          curl -fsS -m 10 --retry 3 \
-            --data-binary "Containerize failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
+# Containerize runs in a separate workflow (`containerize.yml`) so it can
+# be re-run on its own without re-doing the ~40min `make world`. It auto-
+# triggers on a successful build via workflow_run, and supports manual
+# re-run via workflow_dispatch with an optional build_run_id.

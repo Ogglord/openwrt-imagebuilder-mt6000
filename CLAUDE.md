@@ -63,7 +63,7 @@ These look interchangeable and aren't. Both get written into the firmware rootfs
 
 `CONFIG_VERSION_CODE` does **not** drive `REVISION`, only the other way around (fallback). Pinning `CONFIG_VERSION_CODE` alone fixes feed URLs and `DISTRIB_DESCRIPTION` but leaves `DISTRIB_REVISION` with whatever `getver.sh` produced.
 
-**Shallow-clone trap**: our `build` job does a depth-1 fetch of a specific commit (byte-for-byte parity with pesa's release). `getver.sh`'s git path counts commits via `git rev-list REBOOT..HEAD` where `REBOOT=ee53a240…` (a 2019 commit), and on a shallow clone that range is empty → output is `r0-<7-char-sha>`. `getver.sh` has an escape hatch: `try_version()` reads from a `TOPDIR/version` file and short-circuits before the git path, so we write the parsed `rREV-HASH` there before `make world` — see `build-imagebuilder.yml:267-287`. Do not remove the `version` file write without first removing the depth-1 fetch.
+**Shallow-clone trap**: our `build` job does a depth-1 fetch of a specific commit (byte-for-byte parity with pesa's release). `getver.sh`'s git path counts commits via `git rev-list REBOOT..HEAD` where `REBOOT=ee53a240ac902dc83209008a2671e7fdcf55957a` (pesa's fork-specific REBOOT commit), and on a shallow clone that range is empty → output is `r0-<7-char-sha>`. `getver.sh` has an escape hatch: `try_version()` reads from a `TOPDIR/version` file and short-circuits before the git path, so we write the parsed `rREV-HASH` there before `make world` — see `build-imagebuilder.yml:267-287`. Do not remove the `version` file write without first removing the depth-1 fetch.
 
 ### distfeeds.list generation is make-time, not overlay-compatible
 

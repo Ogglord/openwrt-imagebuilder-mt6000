@@ -77,7 +77,7 @@ jobs:
 
             # Derive rREV-HASH via GitHub compare API (avoids shallow-clone trap):
             # REBOOT is the well-known commit where OpenWrt's getver.sh starts counting.
-            REBOOT_SHA="ee53a240016408cc0df9c8ad55e87d0ae7a4b90f"
+            REBOOT_SHA="ee53a240ac902dc83209008a2671e7fdcf55957a"
             AHEAD=$(gh api "repos/pesa1234/openwrt/compare/${REBOOT_SHA}...${LATEST_SHA}" --jq .ahead_by)
             SHORT_HASH=$(gh api "repos/pesa1234/openwrt/commits/${LATEST_SHA}" --jq '.sha[0:10]')
             REV_HASH="r${AHEAD}-${SHORT_HASH}"

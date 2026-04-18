@@ -532,7 +532,12 @@ jobs:
       - name: Accept kernel config defaults for new symbols (Mode 3)
         if: inputs.force_commit != ''
         working-directory: ${{ runner.temp }}/openwrt
-        run: make kernel_olddefconfig
+        run: |
+          # kernel_olddefconfig requires the kernel source to be extracted and
+          # patched first — that's what target/linux/prepare does. Without it
+          # the kernel build_dir doesn't exist yet and the target errors out.
+          make target/linux/prepare
+          make kernel_olddefconfig
 
       - name: Run make world
         working-directory: ${{ runner.temp }}/openwrt

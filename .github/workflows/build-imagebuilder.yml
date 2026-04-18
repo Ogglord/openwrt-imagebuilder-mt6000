@@ -1,5 +1,5 @@
 name: 1. Build ImageBuilder
-run-name: "Build ImageBuilder — ${{ inputs.force_branch || 'auto-discover' }} on ${{ inputs.runner || 'ubuntu-latest' }}"
+run-name: "Build ImageBuilder — ${{ inputs.force_commit && format('commit {0} ({1})', inputs.force_commit, inputs.force_branch_name) || inputs.force_branch || 'auto-discover' }} on ${{ inputs.runner || 'ubuntu-latest' }}"
 
 on:
   schedule:
@@ -7,7 +7,19 @@ on:
   workflow_dispatch:
     inputs:
       force_branch:
-        description: "Force build a specific branch (leave empty for auto-discover)"
+        description: "Mode 2: force a specific branch from MT6000_cust_build (e.g. next-r4.8.0.rss.mtk-test6.18)"
+        required: false
+        type: string
+      force_commit:
+        description: "Mode 3: full SHA on pesa1234/openwrt — bypasses MT6000_cust_build entirely"
+        required: false
+        type: string
+      force_branch_name:
+        description: "Mode 3: branch name to use with force_commit (e.g. next-r4.8.1.rss.mtk)"
+        required: false
+        type: string
+      force_config_url:
+        description: "Mode 3: optional config.buildinfo URL override (auto-falls back to latest same-X.Y if blank)"
         required: false
         type: string
       runner:
@@ -31,6 +43,7 @@ jobs:
       branch: ${{ steps.discover.outputs.branch }}
       asu_version: ${{ steps.discover.outputs.asu_version }}
       commit_sha: ${{ steps.discover.outputs.commit_sha }}
+      rev_hash: ${{ steps.discover.outputs.rev_hash }}
       release_dir: ${{ steps.discover.outputs.release_dir }}
       new_commits: ${{ steps.discover.outputs.new_commits }}
     steps:
@@ -38,27 +51,53 @@ jobs:
         id: discover
         env:
           FORCE_BRANCH: ${{ inputs.force_branch }}
+          FORCE_COMMIT: ${{ inputs.force_commit }}
+          FORCE_BRANCH_NAME: ${{ inputs.force_branch_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          # Derive ASU X.Y version from pesa branch name, treating test
-          # branches as aliases of their base release series:
-          #   next-r4.7.4.rss.mtk            → 4.7
-          #   next-r4.8.0.rss.mtk            → 4.8
-          #   next-r4.8.0.rss.mtk-test6.18   → 4.8
-          # A force-built test branch therefore publishes under the same
-          # `<X.Y>-SNAPSHOT` tag/path as its non-test sibling (latest
-          # forced build wins).
+          # Derive ASU X.Y.Z version from pesa branch name:
+          #   next-r4.7.4.rss.mtk            → 4.7.4
+          #   next-r4.8.0.rss.mtk            → 4.8.0
+          #   next-r4.8.0.rss.mtk-test6.18   → 4.8.0
           derive_asu_version() {
             echo "$1" | sed 's/^next-r//' | cut -d. -f1,2,3
           }
 
-          # Test branches are still skipped on scheduled runs — we only
-          # pick them up via explicit `force_branch`.
-          is_test_branch() { [[ "$1" == *"-test"* ]]; }
+          # ── Mode 3: force_commit — bypass MT6000_cust_build entirely ──────────
+          if [[ -n "${FORCE_COMMIT:-}" ]]; then
+            if [[ -z "${FORCE_BRANCH_NAME:-}" ]]; then
+              echo "::error::force_commit requires force_branch_name to be set"
+              exit 1
+            fi
+            BRANCH="$FORCE_BRANCH_NAME"
+            LATEST_SHA="$FORCE_COMMIT"
+            ASU_VER=$(derive_asu_version "$BRANCH")
 
-          # List pesa's release directories (shared by both code paths below)
+            # Derive rREV-HASH via GitHub compare API (avoids shallow-clone trap):
+            # REBOOT is the well-known commit where OpenWrt's getver.sh starts counting.
+            REBOOT_SHA="ee53a240016408cc0df9c8ad55e87d0ae7a4b90f"
+            AHEAD=$(gh api "repos/pesa1234/openwrt/compare/${REBOOT_SHA}...${LATEST_SHA}" --jq .ahead_by)
+            SHORT_HASH=$(gh api "repos/pesa1234/openwrt/commits/${LATEST_SHA}" --jq '.sha[0:10]')
+            REV_HASH="r${AHEAD}-${SHORT_HASH}"
+
+            echo "Mode:        force_commit"
+            echo "Branch:      ${BRANCH}"
+            echo "Commit SHA:  ${LATEST_SHA}"
+            echo "ASU version: ${ASU_VER}"
+            echo "Rev hash:    ${REV_HASH}"
+
+            echo "new_commits=true"     >> "$GITHUB_OUTPUT"
+            echo "branch=${BRANCH}"     >> "$GITHUB_OUTPUT"
+            echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
+            echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
+            echo "rev_hash=${REV_HASH}" >> "$GITHUB_OUTPUT"
+            echo "release_dir="         >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          # ── Modes 1 & 2: discover from MT6000_cust_build ─────────────────────
           DIRS=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
             -H "Accept: application/vnd.github.v3+json" | \
             jq -r '.[] | select(.type == "dir") | .name' | \
@@ -70,19 +109,18 @@ jobs:
             exit 1
           fi
 
-          # Pick release dir:
-          #   * force_branch: latest dir whose branch suffix matches (supports
-          #     re-building the newest release of a branch, including test ones)
-          #   * auto: absolute latest across all branches
+          # Mode 2: force_branch — pick latest dir for that branch
+          # Mode 1: auto — pick absolute latest dir (test branches included)
           if [[ -n "${FORCE_BRANCH:-}" ]]; then
             RELEASE_DIR=$(echo "$DIRS" | grep -E "_${FORCE_BRANCH}$" | sort | tail -1 || true)
             if [[ -z "$RELEASE_DIR" ]]; then
               echo "::error::No release dir for branch '${FORCE_BRANCH}' in MT6000_cust_build"
               exit 1
             fi
-            echo "Force-building branch: ${FORCE_BRANCH}"
+            echo "Mode: force_branch (${FORCE_BRANCH})"
           else
             RELEASE_DIR=$(echo "$DIRS" | sort | tail -1)
+            echo "Mode: auto-discover"
           fi
 
           # Parse: YYYY-MM-DD_rREV-HASH_BRANCH  (hash is short, branch may contain hyphens)
@@ -97,13 +135,11 @@ jobs:
           echo "Branch:         ${BRANCH}"
           echo "Release commit: ${RELEASE_COMMIT} (short)"
 
-          # Resolve short hash → full SHA against pesa/openwrt so we can
-          # git-fetch exactly that commit later (and so the "already built"
-          # check compares a stable identifier).
+          # Resolve short hash → full SHA
           LATEST_SHA=$(gh api "repos/pesa1234/openwrt/commits/${RELEASE_COMMIT}" --jq .sha)
           echo "Full commit SHA: ${LATEST_SHA}"
 
-          # Skip if we've already built this commit for this branch
+          # Skip if we've already built this commit for this branch (auto only)
           TAG="mediatek-filogic-${BRANCH}"
           ALREADY_BUILT=$(gh api "repos/${{ github.repository }}/releases/tags/${TAG}" --jq .body 2>/dev/null | grep -c "${LATEST_SHA}" || true)
           if [[ "$ALREADY_BUILT" -gt 0 && -z "${FORCE_BRANCH:-}" ]]; then
@@ -113,16 +149,13 @@ jobs:
           fi
 
           ASU_VER=$(derive_asu_version "$BRANCH")
-          if is_test_branch "$BRANCH" && [[ -z "${FORCE_BRANCH:-}" ]]; then
-            echo "::warning::Latest branch is a test branch (${BRANCH}) — skipping scheduled run"
-            echo "new_commits=false" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
+          REV_HASH=$(echo "$RELEASE_DIR" | grep -oE 'r[0-9]+-[a-f0-9]+' | head -1)
 
-          echo "new_commits=true"   >> "$GITHUB_OUTPUT"
-          echo "branch=${BRANCH}"   >> "$GITHUB_OUTPUT"
+          echo "new_commits=true"       >> "$GITHUB_OUTPUT"
+          echo "branch=${BRANCH}"       >> "$GITHUB_OUTPUT"
           echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
           echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
+          echo "rev_hash=${REV_HASH}"   >> "$GITHUB_OUTPUT"
           echo "release_dir=${RELEASE_DIR}" >> "$GITHUB_OUTPUT"
 
 
@@ -231,12 +264,39 @@ jobs:
         working-directory: ${{ runner.temp }}/openwrt
         env:
           RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
+          FORCE_CONFIG_URL: ${{ inputs.force_config_url }}
+          BRANCH: ${{ needs.discover.outputs.branch }}
           ASU_VER: ${{ needs.discover.outputs.asu_version }}
+          REV_HASH: ${{ needs.discover.outputs.rev_hash }}
+          GH_TOKEN: ${{ github.token }}
         run: |
           # Use pesa's *resolved* config.buildinfo (not the pre-build template)
           # so our IB-built packages match the .manifest we later use as
           # firmware-packages.txt — no "package X not found" at make image time.
-          CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
+          #
+          # Priority:
+          #   1. force_config_url input (explicit override)
+          #   2. release_dir from MT6000_cust_build (modes 1 & 2)
+          #   3. Auto-fallback: latest MT6000_cust_build dir for the same X.Y branch (mode 3)
+          if [[ -n "${FORCE_CONFIG_URL:-}" ]]; then
+            CONFIG_URL="$FORCE_CONFIG_URL"
+            echo "Using explicit force_config_url"
+          elif [[ -n "${RELEASE_DIR:-}" ]]; then
+            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
+          else
+            # Mode 3 fallback: find the most recent release dir for the same X.Y branch prefix
+            XY=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
+            FALLBACK_DIR=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
+              -H "Accept: application/vnd.github.v3+json" | \
+              jq -r '.[] | select(.type == "dir") | .name' | \
+              grep -E '^[0-9]{4}' | grep "next-r${XY}\." | sort | tail -1 || true)
+            if [[ -z "$FALLBACK_DIR" ]]; then
+              echo "::error::No fallback config.buildinfo found for X.Y=${XY} in MT6000_cust_build"
+              exit 1
+            fi
+            echo "Mode 3 fallback: using config from ${FALLBACK_DIR}"
+            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${FALLBACK_DIR}/targets/mediatek/filogic/config.buildinfo"
+          fi
           echo "Fetching config from: ${CONFIG_URL}"
           curl -fsSL "${CONFIG_URL}" -o .config
 
@@ -275,8 +335,7 @@ jobs:
           # resolved URL is %U/targets/%S/packages/packages.adb = this base +
           # /targets/mediatek/filogic/packages/packages.adb.
           echo "CONFIG_VERSION_REPO=\"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/releases/${ASU_VER}\"" >> .config
-          REV_HASH=$(echo "$RELEASE_DIR" | grep -oE 'r[0-9]+-[a-f0-9]+' | head -1)
-          if [[ -n "$REV_HASH" ]]; then
+          if [[ -n "${REV_HASH}" ]]; then
             echo "CONFIG_VERSION_CODE=\"${REV_HASH}\"" >> .config
             # scripts/getver.sh prefers a TOPDIR/version file over git-rev-list,
             # which returns r0-<hash> on a shallow clone. REVISION flows through
@@ -286,7 +345,7 @@ jobs:
             echo "$REV_HASH" > version
             echo "Pinned CONFIG_VERSION_CODE=${REV_HASH} and wrote TOPDIR/version"
           else
-            echo "::warning::Could not parse rREV-HASH from release_dir='${RELEASE_DIR}' — falling back to getver.sh (r0-*)"
+            echo "::warning::No REV_HASH available — falling back to getver.sh (r0-*)"
           fi
 
           # Strip pesa's RELEASE_DIR segment from include/feeds.mk so both the
@@ -569,6 +628,7 @@ jobs:
       - name: Generate firmware-packages.txt from pesa's manifest
         env:
           RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
+          BRANCH: ${{ needs.discover.outputs.branch }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
@@ -577,6 +637,21 @@ jobs:
           # the config.buildinfo we just compiled against, so the resulting
           # ImageBuilder's DEFAULT_PACKAGES can never reference a package the
           # package repo doesn't have.
+          #
+          # Mode 3 (no release_dir): fall back to the most recent manifest for
+          # the same X.Y branch prefix in MT6000_cust_build.
+          if [[ -z "${RELEASE_DIR:-}" ]]; then
+            XY=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
+            RELEASE_DIR=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
+              -H "Accept: application/vnd.github.v3+json" | \
+              jq -r '.[] | select(.type == "dir") | .name' | \
+              grep -E '^[0-9]{4}' | grep "next-r${XY}\." | sort | tail -1 || true)
+            if [[ -z "$RELEASE_DIR" ]]; then
+              echo "::error::No fallback manifest found for X.Y=${XY} in MT6000_cust_build"
+              exit 1
+            fi
+            echo "Mode 3 fallback: using manifest from ${RELEASE_DIR}"
+          fi
           MANIFEST_NAME=$(gh api \
             "repos/pesa1234/MT6000_cust_build/contents/${RELEASE_DIR}/targets/mediatek/filogic" \
             --jq '.[] | select(.name | endswith(".manifest")) | .name' | head -1)

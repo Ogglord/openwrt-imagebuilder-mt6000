@@ -79,8 +79,23 @@ jobs:
             # REBOOT is the well-known commit where OpenWrt's getver.sh starts counting.
             REBOOT_SHA="ee53a240ac902dc83209008a2671e7fdcf55957a"
             AHEAD=$(gh api "repos/pesa1234/openwrt/compare/${REBOOT_SHA}...${LATEST_SHA}" --jq .ahead_by)
-            SHORT_HASH=$(gh api "repos/pesa1234/openwrt/commits/${LATEST_SHA}" --jq '.sha[0:10]')
+            # LATEST_SHA is already the full SHA from the caller — no extra API call needed.
+            SHORT_HASH="${LATEST_SHA:0:10}"
             REV_HASH="r${AHEAD}-${SHORT_HASH}"
+
+            # Resolve fallback release_dir once here so both the config and
+            # manifest steps can consume it without making their own API calls.
+            XY=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
+            RELEASE_DIR=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
+              -H "Accept: application/vnd.github.v3+json" | \
+              jq -r '.[] | select(.type == "dir") | .name' | \
+              grep -E '^[0-9]{4}' | grep "next-r${XY}\." | sort | tail -1 || true)
+            if [[ -z "$RELEASE_DIR" ]]; then
+              echo "::warning::No fallback release dir for X.Y=${XY} in MT6000_cust_build — config/manifest steps must use force_config_url"
+              RELEASE_DIR=""
+            else
+              echo "Mode 3 fallback release dir: ${RELEASE_DIR}"
+            fi
 
             echo "Mode:        force_commit"
             echo "Branch:      ${BRANCH}"
@@ -88,12 +103,14 @@ jobs:
             echo "ASU version: ${ASU_VER}"
             echo "Rev hash:    ${REV_HASH}"
 
+            # Mode 3 intentionally skips the ALREADY_BUILT check — the caller
+            # has explicitly chosen a commit that may already have a release.
             echo "new_commits=true"     >> "$GITHUB_OUTPUT"
             echo "branch=${BRANCH}"     >> "$GITHUB_OUTPUT"
             echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
             echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
             echo "rev_hash=${REV_HASH}" >> "$GITHUB_OUTPUT"
-            echo "release_dir="         >> "$GITHUB_OUTPUT"
+            echo "release_dir=${RELEASE_DIR}" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -284,18 +301,12 @@ jobs:
           elif [[ -n "${RELEASE_DIR:-}" ]]; then
             CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
           else
-            # Mode 3 fallback: find the most recent release dir for the same X.Y branch prefix
-            XY=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
-            FALLBACK_DIR=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
-              -H "Accept: application/vnd.github.v3+json" | \
-              jq -r '.[] | select(.type == "dir") | .name' | \
-              grep -E '^[0-9]{4}' | grep "next-r${XY}\." | sort | tail -1 || true)
-            if [[ -z "$FALLBACK_DIR" ]]; then
-              echo "::error::No fallback config.buildinfo found for X.Y=${XY} in MT6000_cust_build"
+            # Mode 3: release_dir resolved in discover step — fail if missing
+            if [[ -z "${RELEASE_DIR:-}" ]]; then
+              echo "::error::No release_dir available and no force_config_url set — cannot fetch config.buildinfo"
               exit 1
             fi
-            echo "Mode 3 fallback: using config from ${FALLBACK_DIR}"
-            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${FALLBACK_DIR}/targets/mediatek/filogic/config.buildinfo"
+            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
           fi
           echo "Fetching config from: ${CONFIG_URL}"
           curl -fsSL "${CONFIG_URL}" -o .config
@@ -638,19 +649,10 @@ jobs:
           # ImageBuilder's DEFAULT_PACKAGES can never reference a package the
           # package repo doesn't have.
           #
-          # Mode 3 (no release_dir): fall back to the most recent manifest for
-          # the same X.Y branch prefix in MT6000_cust_build.
+          # release_dir is always set by discover (Mode 3 resolves fallback there).
           if [[ -z "${RELEASE_DIR:-}" ]]; then
-            XY=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
-            RELEASE_DIR=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
-              -H "Accept: application/vnd.github.v3+json" | \
-              jq -r '.[] | select(.type == "dir") | .name' | \
-              grep -E '^[0-9]{4}' | grep "next-r${XY}\." | sort | tail -1 || true)
-            if [[ -z "$RELEASE_DIR" ]]; then
-              echo "::error::No fallback manifest found for X.Y=${XY} in MT6000_cust_build"
-              exit 1
-            fi
-            echo "Mode 3 fallback: using manifest from ${RELEASE_DIR}"
+            echo "::error::No release_dir — cannot fetch manifest"
+            exit 1
           fi
           MANIFEST_NAME=$(gh api \
             "repos/pesa1234/MT6000_cust_build/contents/${RELEASE_DIR}/targets/mediatek/filogic" \

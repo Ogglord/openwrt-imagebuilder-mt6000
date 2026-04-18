@@ -529,6 +529,11 @@ jobs:
           # (flaky mirrors are common).
           make download -j$(nproc) || { echo "Retrying..."; sleep 60; make download -j1 V=s; }
 
+      - name: Accept kernel config defaults for new symbols (Mode 3)
+        if: inputs.force_commit != ''
+        working-directory: ${{ runner.temp }}/openwrt
+        run: make kernel_olddefconfig
+
       - name: Run make world
         working-directory: ${{ runner.temp }}/openwrt
         run: |

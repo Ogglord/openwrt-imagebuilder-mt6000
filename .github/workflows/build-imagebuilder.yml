@@ -277,6 +277,13 @@ jobs:
           sed -i 's/libustream-mbedtls/libustream-openssl/g' include/target.mk
           sed -i 's/apk-mbedtls/apk-openssl/g' include/default-packages.mk
 
+          # MHZ19B (Winsen CO2 sensor) was added to Linux 6.18.21 but isn't in
+          # pesa's generic/config-6.18 for older commits. syncconfig in 6.18+
+          # errors on NEW symbols instead of silently defaulting. Pre-populate
+          # it as disabled; the grep guard makes this a no-op on newer commits.
+          grep -q CONFIG_MHZ19B target/linux/generic/config-6.18 || \
+            echo "# CONFIG_MHZ19B is not set" >> target/linux/generic/config-6.18
+
       - name: Apply pesa's config.buildinfo
         working-directory: ${{ runner.temp }}/openwrt
         env:
@@ -535,13 +542,9 @@ jobs:
           # Mirror build output to a log file so the failure healthcheck can
           # send the tail to healthchecks.io.
           exec > >(tee /tmp/openwrt-build.log) 2>&1
-          # setsid detaches from the controlling terminal so kconfig syncconfig
-          # cannot open /dev/tty to prompt for NEW symbols (e.g. drivers added
-          # in a newer kernel than pesa's config-6.18 covers). Without a TTY,
-          # syncconfig falls back to Kconfig defaults silently.
-          # Note: < /dev/null alone is insufficient — syncconfig opens /dev/tty
-          # directly, bypassing stdin redirection.
-          setsid make -j$(nproc) || { echo "Retrying..."; sleep 60; setsid make -j1 V=s; }
+          # Mirror build output to a log file so the failure healthcheck can
+          # send the tail to healthchecks.io.
+          make -j$(nproc) || { echo "Retrying..."; sleep 60; make -j1 V=s; }
 
       - name: Extract ImageBuilder tarball
         run: |

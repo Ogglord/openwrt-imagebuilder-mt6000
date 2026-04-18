@@ -38,14 +38,14 @@ This is the critical invariant — the naming must match what the ASU server exp
 
 | Stage | Value |
 |---|---|
-| Firmware `CONFIG_VERSION_NUMBER` | `next-r4.8.0.rss.mtk-test6.18-SNAPSHOT` |
-| ASU branch key (in `branches.json`) | `next-r4.8.0.rss.mtk-test6.18` |
-| Container tag (ASU resolves to this) | `mediatek-filogic-openwrt-next-r4.8.0.rss.mtk-test6.18` |
-| Metadata path on `releases` branch | `releases/next-r4.8.0.rss.mtk-test6.18-SNAPSHOT/` |
+| Firmware `CONFIG_VERSION_NUMBER` | `4.8.0` |
+| ASU branch key (in `branches.json`) | `4.8` |
+| Container tag (ASU resolves to this) | `mediatek-filogic-v4.8.0` |
+| Metadata path on `releases` branch | `releases/4.8.0/` |
 
-ASU's `get_branch()` does `rsplit("-", 1)[0]` on the version to get the branch key, and `get_container_version_tag()` strips `-SNAPSHOT` and prepends `openwrt-` to get the image tag. Don't touch the version string or container tag format without changing both sides.
+ASU's `get_branch()` uses `rsplit(".", 1)[0]` for stable versions (no `-SNAPSHOT` suffix), giving `"4.8.0"` → `"4.8"`. `get_container_version_tag()` matches `^\d+\.\d+\.\d+` and prepends `v` to get the image tag. Don't touch the version string or container tag format without changing both sides.
 
-Branches derive an ASU X.Y version via `sed 's/^next-r//' | cut -d. -f1,2` (→ `4.8` for `next-r4.8.0.rss.mtk` and `next-r4.8.0.rss.mtk-test6.18` alike). Test and non-test branches that collapse to the same `<X.Y>` publish to the same `-SNAPSHOT` tag/path — latest build wins.
+Branches derive an ASU X.Y.Z version via `sed 's/^next-r//' | cut -d. -f1,2,3` (→ `4.8.0` for both `next-r4.8.0.rss.mtk` and `next-r4.8.0.rss.mtk-test6.18`). The branch key is X.Y only (`cut -d. -f1,2`). Test and non-test branches that share the same X.Y.Z collapse to the same version — latest published wins.
 
 ### OpenWrt version variables — `REVISION` vs `VERSION_CODE`
 

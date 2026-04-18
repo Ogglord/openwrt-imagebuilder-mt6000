@@ -119,7 +119,7 @@ jobs:
           ASU_VERSION: ${{ steps.meta.outputs.asu_version }}
         run: |
           set -euo pipefail
-          VERSION="${ASU_VERSION}-SNAPSHOT"
+          VERSION="${ASU_VERSION}"
 
           rm -rf /tmp/pkg-staging /tmp/releases-branch
           mkdir -p /tmp/pkg-staging
@@ -168,7 +168,7 @@ jobs:
           ASU_VER: ${{ steps.meta.outputs.asu_version }}
         run: |
           TAGS="${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-${BRANCH}"
-          TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-openwrt-${ASU_VER}"
+          TAGS="${TAGS},${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:mediatek-filogic-v${ASU_VER}"
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Build and push ImageBuilder container
@@ -190,7 +190,7 @@ jobs:
         run: |
           TAG="mediatek-filogic-${BRANCH}"
           gh release delete "${TAG}" --cleanup-tag -y --repo "${{ github.repository }}" 2>/dev/null || true
-          VERSION="${ASU_VERSION}-SNAPSHOT"
+          VERSION="${ASU_VERSION}"
           gh release create "${TAG}" \
             --repo "${{ github.repository }}" \
             --title "ImageBuilder: ${BRANCH}" \

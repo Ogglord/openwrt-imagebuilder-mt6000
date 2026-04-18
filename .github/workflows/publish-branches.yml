@@ -77,32 +77,33 @@ jobs:
         run: |
           PESA_BRANCH="${{ matrix.branch_key }}"
 
-          # Derive ASU X.Y branch key: next-r4.7.4.rss.mtk → 4.7
+          # Derive ASU X.Y branch key and X.Y.Z version:
+          #   next-r4.7.4.rss.mtk → key=4.7  ver=4.7.4
+          #   next-r4.8.0.rss.mtk-test6.18 → key=4.8  ver=4.8.0
           ASU_KEY=$(echo "$PESA_BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
-          VERSION="${ASU_KEY}-SNAPSHOT"
-
-          # Display name: strip next- prefix for readability
-          DISPLAY_NAME=$(echo "$PESA_BRANCH" | sed 's/^next-//')
+          ASU_VER=$(echo "$PESA_BRANCH" | sed 's/^next-r//' | cut -d. -f1,2,3)
+          VERSION="${ASU_VER}"
 
           ARCH="aarch64_cortex-a53"
 
           echo "Pesa branch: $PESA_BRANCH"
           echo "ASU key:     $ASU_KEY"
+          echo "ASU version: $ASU_VER"
           echo "Version:     $VERSION"
-          echo "Display:     $DISPLAY_NAME"
 
           mkdir -p output
 
-          # branches.json entry — key is X.Y, name is the pesa label
+          # branches.json entry — key is X.Y (branch), version is X.Y.Z (stable)
           jq -n \
             --arg key "$ASU_KEY" \
-            --arg name "$DISPLAY_NAME" \
+            --arg ver "$ASU_VER" \
             --arg arch "$ARCH" \
             '{
               ($key): {
-                name: $name,
+                name: $ver,
+                version: $ver,
                 enabled: true,
-                snapshot: true,
+                snapshot: false,
                 path: "{version}",
                 path_packages: "DEPRECATED",
                 package_changes: [],
@@ -111,8 +112,9 @@ jobs:
             }' > "output/entry-${ASU_KEY}.json"
 
           # .targets.json maps target → arch (upstream ASU convention)
+          # Named by full version so the publish step knows the exact path.
           jq -n --arg arch "$ARCH" '{"mediatek/filogic": $arch}' \
-            > "output/targets-${ASU_KEY}.json"
+            > "output/targets-${ASU_VER}.json"
 
           echo "Branch entry:"
           cat "output/entry-${ASU_KEY}.json"
@@ -159,14 +161,14 @@ jobs:
       - name: Generate .versions.json
         if: steps.merge.outputs.skip != 'true'
         run: |
-          # Build version list: each branch key gets a -SNAPSHOT version
-          VERSIONS=$(jq -r 'keys[]' branches.json | sort -rV | while read -r KEY; do echo "${KEY}-SNAPSHOT"; done)
-          LATEST=$(jq -r 'keys | sort | last' branches.json)
+          # Build version list from the .version field of each branch entry.
+          VERSIONS=$(jq -r '[.[].version] | .[]' branches.json | sort -rV)
+          LATEST=$(echo "$VERSIONS" | head -1)
           VERSIONS_JSON=$(echo "$VERSIONS" | jq -R . | jq -sc .)
 
           jq -n \
-            --arg upcoming "${LATEST}-SNAPSHOT" \
-            --arg stable "${LATEST}-SNAPSHOT" \
+            --arg upcoming "${LATEST}" \
+            --arg stable "${LATEST}" \
             --argjson versions_list "$VERSIONS_JSON" \
             '{
               upcoming_version: $upcoming,
@@ -249,8 +251,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           for targets_file in entries/targets-*.json; do
-            BRANCH_KEY=$(basename "$targets_file" | sed 's/^targets-//' | sed 's/\.json$//')
-            VERSION="${BRANCH_KEY}-SNAPSHOT"
+            VERSION=$(basename "$targets_file" | sed 's/^targets-//' | sed 's/\.json$//')
             DEST_PATH="${VERSION}/.targets.json"
 
             echo "Pushing ${DEST_PATH}..."

@@ -529,23 +529,16 @@ jobs:
           # (flaky mirrors are common).
           make download -j$(nproc) || { echo "Retrying..."; sleep 60; make download -j1 V=s; }
 
-      - name: Accept kernel config defaults for new symbols (Mode 3)
-        if: inputs.force_commit != ''
-        working-directory: ${{ runner.temp }}/openwrt
-        run: |
-          # kernel_olddefconfig requires the kernel source to be extracted and
-          # patched first — that's what target/linux/prepare does. Without it
-          # the kernel build_dir doesn't exist yet and the target errors out.
-          make target/linux/prepare
-          make kernel_olddefconfig
-
       - name: Run make world
         working-directory: ${{ runner.temp }}/openwrt
         run: |
           # Mirror build output to a log file so the failure healthcheck can
           # send the tail to healthchecks.io.
           exec > >(tee /tmp/openwrt-build.log) 2>&1
-          make -j$(nproc) || { echo "Retrying..."; sleep 60; make -j1 V=s; }
+          # Redirect stdin from /dev/null so kconfig syncconfig silently accepts
+          # defaults for any NEW symbols (e.g. drivers added in a newer kernel
+          # release) instead of prompting interactively and failing with no TTY.
+          make -j$(nproc) < /dev/null || { echo "Retrying..."; sleep 60; make -j1 V=s < /dev/null; }
 
       - name: Extract ImageBuilder tarball
         run: |

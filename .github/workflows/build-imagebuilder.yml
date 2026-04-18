@@ -754,6 +754,51 @@ jobs:
             --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
             "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
 
+      - name: Capture build log for Claude
+        if: failure() && github.event_name != 'workflow_dispatch'
+        run: |
+          # Write log to workspace so the action step can read it as a file
+          # (action `with:` prompts are static — can't inject shell variables).
+          tail -c 10000 /tmp/openwrt-build.log > "$GITHUB_WORKSPACE/.failed-build-log.txt" 2>/dev/null \
+            || echo "No build log (failure occurred before make world)" \
+               > "$GITHUB_WORKSPACE/.failed-build-log.txt"
+          # Authenticate git so Claude can push a fix branch
+          git config user.name  "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git remote set-url origin \
+            "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git"
+
+      - name: Auto-fix failure with Claude (scheduled builds only)
+        if: failure() && github.event_name != 'workflow_dispatch'
+        uses: anthropic/claude-code-action@v1
+        with:
+          anthropic_api_key: ${{ secrets.ANTHROPIC_API_KEY }}
+          allowed_tools: "Bash,Read,Edit,Write,Glob,Grep"
+          prompt: |
+            A scheduled CI build (not manually triggered) just failed for this OpenWrt
+            ImageBuilder repo. Read CLAUDE.md first for full pipeline context, then
+            diagnose and fix the failure.
+
+            Branch: ${{ needs.discover.outputs.branch }}
+            Commit: ${{ needs.discover.outputs.commit_sha }}
+            Run:    ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+            The build log tail (~10 KB) has been written to .failed-build-log.txt in
+            the repo root. Read it to understand the failure.
+
+            Steps:
+            1. Read CLAUDE.md for pipeline context, then read .failed-build-log.txt.
+            2. Identify the root cause from the log and the relevant workflow/source files.
+            3. Apply the minimal fix to the workflow or source files in this repo.
+               If the root cause is in pesa's upstream (outside our control), add a
+               defensive workaround or guard to the affected workflow step instead.
+            4. Delete .failed-build-log.txt — it must not be committed.
+            5. Create a fix branch: fix/auto-YYYYMMDD-<2-3-word-slug> (kebab-case).
+            6. Commit and push. Then open a PR against main with:
+               - Root cause (one sentence)
+               - What was changed and why it fixes it
+               - The failed run URL
+
 # Containerize runs in a separate workflow (`containerize.yml`) so it can
 # be re-run on its own without re-doing the ~40min `make world`. It auto-
 # triggers on a successful build via workflow_run, and supports manual

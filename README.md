@@ -51,9 +51,7 @@ Given branch `next-r4.8.0.rss.mtk`:
 ./debug-package.sh <pkg-path>   # single package with V=s, cached layers to defconfig
 ```
 
-Logs in `./logs/`. Build failures are auto-diagnosed via `claude`.
-
-## Required secrets
+## Repository secrets
 
 | Secret | Purpose |
 |---|---|
@@ -66,6 +64,6 @@ Logs in `./logs/`. Build failures are auto-diagnosed via `claude`.
 | Repo | Purpose |
 |---|---|
 | [Ogglord/asu](https://github.com/Ogglord/asu) | ASU server that uses these containers |
-| [Ogglord/asu-deploy](https://github.com/Ogglord/asu-deploy) | Deployment config (compose, deploy scripts) |
+| [Ogglord/asu-deploy](https://github.com/Ogglord/asu-deploy) | Kickstart config for asu (compose, dev scripts) |
 | [pesa1234/openwrt](https://github.com/pesa1234/openwrt) | Source fork we build from |
 | [pesa1234/MT6000_cust_build](https://github.com/pesa1234/MT6000_cust_build) | Release dirs with `.config` and `.manifest` |

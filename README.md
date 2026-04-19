@@ -4,7 +4,24 @@ Builds an OpenWrt ImageBuilder container from [pesa1234/openwrt](https://github.
 
 **What this produces:** a container (`ghcr.io/ogglord/openwrt-imagebuilder`) where `make image PROFILE=glinet_gl-mt6000` reproduces pesa's full firmware (LuCI, kmods, openssl variants) similar to what is publised on [pesa1234/MT6000_cust_build](https://github.com/pesa1234/MT6000_cust_build).
 
+## How to use it
 
+
+```bash
+cat /etc/config/attendedsysupgrade
+config server 'server'
+        option url 'https://sysupgrade.ogglord.com'
+```
+
+use `owut` like normal. `owut` is a bit picky about package version deviations. A recommended firmare upgrade procedure is
+
+```bash
+owut versions
+owut check -V 4.8.0
+owut download -V 4.8.0
+owut verify
+owut install
+```
 
 ## Naming conventions
 
@@ -16,15 +33,6 @@ Given branch `next-r4.8.0.rss.mtk`:
 | Sysupgrade branch key | `4.8` |
 | Container tags | `mediatek-filogic-next-r4.8.0.rss.mtk`, `mediatek-filogic-v4.8.0` |
 | Metadata path on `releases` branch | `4.8.0/` |
-
-**Derivation:**
-```
-next-r4.8.0.rss.mtk
-  → strip next-r, take first 3 parts   → 4.8.0  (firmware version / ASU version)
-  → take first 2 parts                 → 4.8    (ASU branch key in branches.json)
-  → prepend v                          → v4.8.0 (ASU-resolved container tag suffix)
-```
-
 
 
 ## Patches applied to openwrt source

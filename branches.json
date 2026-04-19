@@ -12,8 +12,8 @@
     }
   },
   "4.8": {
-    "name": "4.8.1",
-    "version": "4.8.1",
+    "name": "4.8.0",
+    "version": "4.8.0",
     "enabled": true,
     "snapshot": false,
     "path": "{version}",

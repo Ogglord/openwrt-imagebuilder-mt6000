@@ -1,5 +1,7 @@
 # OpenWrt ImageBuilder — GL.iNet Flint 2 (MT6000)
 
+[![1. Build ImageBuilder](https://github.com/Ogglord/openwrt-imagebuilder-mt6000/actions/workflows/build-imagebuilder.yml/badge.svg?branch=main)](https://github.com/Ogglord/openwrt-imagebuilder-mt6000/actions/workflows/build-imagebuilder.yml)
+
 Builds an OpenWrt ImageBuilder container from [pesa1234/openwrt](https://github.com/pesa1234/openwrt), targeting exclusively `Flint2 (MT6000)`. The container is consumed by [sysupgrade.ogglord.com](https://sysupgrade.ogglord.com) to assemble custom firmware on demand.
 
 **What this produces:** a container (`ghcr.io/ogglord/openwrt-imagebuilder`) where `make image PROFILE=glinet_gl-mt6000` reproduces pesa's full firmware (LuCI, kmods, openssl variants) similar to what is publised on [pesa1234/MT6000_cust_build](https://github.com/pesa1234/MT6000_cust_build).

@@ -6,6 +6,7 @@ Builds an OpenWrt ImageBuilder container from [pesa1234/openwrt](https://github.
 
 ## How to use it
 
+Install owut
 
 ```bash
 cat /etc/config/attendedsysupgrade

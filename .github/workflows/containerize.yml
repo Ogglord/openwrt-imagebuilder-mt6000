@@ -70,8 +70,19 @@ jobs:
             exit 1
           fi
           echo "run_id=$RUN_ID" >> "$GITHUB_OUTPUT"
+          # Check if the build actually produced artifacts — it may have been
+          # skipped (already built). Exit cleanly rather than failing on a missing artifact.
+          ARTIFACT_COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/artifacts" \
+            --jq '[.artifacts[] | select(.name == "imagebuilder-tarball")] | length')
+          if [[ "$ARTIFACT_COUNT" -eq 0 ]]; then
+            echo "No imagebuilder-tarball artifact in run ${RUN_ID} — build was skipped (already built). Nothing to containerize."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
 
       - name: Download artifact — ImageBuilder tarball
+        if: steps.resolve.outputs.skip != 'true'
         uses: actions/download-artifact@v5
         with:
           name: imagebuilder-tarball
@@ -79,6 +90,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download artifact — packages-staging
+        if: steps.resolve.outputs.skip != 'true'
         uses: actions/download-artifact@v5
         with:
           name: packages-staging
@@ -86,6 +98,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download artifact — firmware-packages (into build context)
+        if: steps.resolve.outputs.skip != 'true'
         uses: actions/download-artifact@v5
         with:
           # Land at repo root so the Containerfile's COPY picks it up,
@@ -96,6 +109,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Download artifact — build-meta
+        if: steps.resolve.outputs.skip != 'true'
         uses: actions/download-artifact@v5
         with:
           name: build-meta
@@ -103,6 +117,7 @@ jobs:
           github-token: ${{ github.token }}
 
       - name: Load build metadata
+        if: steps.resolve.outputs.skip != 'true'
         id: meta
         run: |
           set -euo pipefail
@@ -114,6 +129,7 @@ jobs:
                  "release_dir=" + .release_dir' build-meta.json >> "$GITHUB_OUTPUT"
 
       - name: Publish packages and metadata to releases branch
+        if: steps.resolve.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           ASU_VERSION: ${{ steps.meta.outputs.asu_version }}
@@ -152,9 +168,11 @@ jobs:
           done
 
       - name: Set up Docker Buildx
+        if: steps.resolve.outputs.skip != 'true'
         uses: docker/setup-buildx-action@v3
 
       - name: Log in to GHCR
+        if: steps.resolve.outputs.skip != 'true'
         uses: docker/login-action@v3
         with:
           registry: ghcr.io
@@ -162,6 +180,7 @@ jobs:
           password: ${{ secrets.GITHUB_TOKEN }}
 
       - name: Compute container tags
+        if: steps.resolve.outputs.skip != 'true'
         id: tags
         env:
           BRANCH: ${{ steps.meta.outputs.branch }}
@@ -172,6 +191,7 @@ jobs:
           echo "tags=$TAGS" >> "$GITHUB_OUTPUT"
 
       - name: Build and push ImageBuilder container
+        if: steps.resolve.outputs.skip != 'true'
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -182,6 +202,7 @@ jobs:
           cache-to: type=gha,mode=max
 
       - name: Create release to record built commit
+        if: steps.resolve.outputs.skip != 'true'
         env:
           GH_TOKEN: ${{ github.token }}
           BRANCH: ${{ steps.meta.outputs.branch }}

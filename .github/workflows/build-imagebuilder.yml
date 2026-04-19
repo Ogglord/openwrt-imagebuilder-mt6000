@@ -57,10 +57,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Derive ASU X.Y.Z version from pesa branch name:
-          #   next-r4.7.4.rss.mtk            → 4.7.4
-          #   next-r4.8.0.rss.mtk            → 4.8.0
-          #   next-r4.8.0.rss.mtk-test6.18   → 4.8.0
+          # Strip next-r prefix, take first 3 version components.
           derive_asu_version() {
             echo "$1" | sed 's/^next-r//' | cut -d. -f1,2,3
           }
@@ -75,16 +72,13 @@ jobs:
             LATEST_SHA="$FORCE_COMMIT"
             ASU_VER=$(derive_asu_version "$BRANCH")
 
-            # Derive rREV-HASH via GitHub compare API (avoids shallow-clone trap):
-            # REBOOT is the well-known commit where OpenWrt's getver.sh starts counting.
+            # rREV-HASH via compare API — avoids shallow-clone trap; REBOOT is getver.sh's count origin.
             REBOOT_SHA="ee53a240ac902dc83209008a2671e7fdcf55957a"
             AHEAD=$(gh api "repos/pesa1234/openwrt/compare/${REBOOT_SHA}...${LATEST_SHA}" --jq .ahead_by)
-            # LATEST_SHA is already the full SHA from the caller — no extra API call needed.
             SHORT_HASH="${LATEST_SHA:0:10}"
             REV_HASH="r${AHEAD}-${SHORT_HASH}"
 
-            # Resolve fallback release_dir once here so both the config and
-            # manifest steps can consume it without making their own API calls.
+            # Resolve fallback release_dir for config/manifest steps.
             XY=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
             RELEASE_DIR=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
               -H "Accept: application/vnd.github.v3+json" | \
@@ -103,8 +97,7 @@ jobs:
             echo "ASU version: ${ASU_VER}"
             echo "Rev hash:    ${REV_HASH}"
 
-            # Mode 3 intentionally skips the ALREADY_BUILT check — the caller
-            # has explicitly chosen a commit that may already have a release.
+            # Mode 3 skips ALREADY_BUILT — caller explicitly chose the commit.
             echo "new_commits=true"     >> "$GITHUB_OUTPUT"
             echo "branch=${BRANCH}"     >> "$GITHUB_OUTPUT"
             echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
@@ -184,18 +177,14 @@ jobs:
     timeout-minutes: 360
 
     env:
-      # One source of truth for "runner is GitHub-hosted". Resolves to the
-      # string "true" / "false" — compare with == 'true' in step ifs.
-      IS_GH_RUNNER: ${{ inputs.runner == 'ubuntu-latest' || inputs.runner == '' }}
-      # OpenWrt build-env knobs needed by nearly every make step below.
+      IS_GH_RUNNER: ${{ inputs.runner == 'ubuntu-latest' || inputs.runner == '' }} # true when GitHub-hosted
       FORCE_UNSAFE_CONFIGURE: 1
       LC_ALL: C
       TAR_OPTIONS: --no-same-owner
 
     steps:
       - name: Healthcheck — start
-        # Tolerate failure: hc-ping going down must not fail the build.
-        run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/start" || true
+        run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/start" || true # tolerate failure
 
       - uses: actions/checkout@v5
 
@@ -232,8 +221,7 @@ jobs:
           RELEASE_SHA: ${{ needs.discover.outputs.commit_sha }}
         run: |
           set -euo pipefail
-          # Depth-1 fetch of the exact release commit — guarantees byte-parity
-          # with pesa's release without cloning the full branch history.
+          # Depth-1 fetch of exact commit for byte-parity with pesa's release.
           DEST="${{ runner.temp }}/openwrt"
           mkdir -p "$DEST" && cd "$DEST"
           git init --quiet
@@ -272,9 +260,7 @@ jobs:
           set -euo pipefail
           PATCHES="${GITHUB_WORKSPACE}/patches"
 
-          # Apply static patches from patches/ — generated against next-r4.8.0.rss.mtk.
-          # If a patch fails after a pesa upstream change, the auto-fix action
-          # will regenerate it.
+          # patches/ generated against next-r4.8.0.rss.mtk; auto-fix regenerates on upstream change.
           git apply --whitespace=fix "${PATCHES}/001-openssl-packages.patch"
           echo "Applied 001-openssl-packages.patch"
 
@@ -284,10 +270,7 @@ jobs:
           git apply --whitespace=fix "${PATCHES}/003-ib-standalone-apk-fallback.patch"
           echo "Applied 003-ib-standalone-apk-fallback.patch"
 
-          # MHZ19B (Winsen CO2 sensor) was added to Linux 6.18.21 but isn't in
-          # pesa's generic/config-6.18 for older commits. syncconfig in 6.18+
-          # errors on NEW symbols instead of silently defaulting. Pre-populate
-          # it as disabled; the grep guard makes this a no-op on newer commits.
+          # MHZ19B missing in older commits; pre-populate to avoid syncconfig error in 6.18+.
           grep -q CONFIG_MHZ19B target/linux/generic/config-6.18 || \
             echo "# CONFIG_MHZ19B is not set" >> target/linux/generic/config-6.18
 
@@ -301,21 +284,14 @@ jobs:
           REV_HASH: ${{ needs.discover.outputs.rev_hash }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Use pesa's *resolved* config.buildinfo (not the pre-build template)
-          # so our IB-built packages match the .manifest we later use as
-          # firmware-packages.txt — no "package X not found" at make image time.
-          #
-          # Priority:
-          #   1. force_config_url input (explicit override)
-          #   2. release_dir from MT6000_cust_build (modes 1 & 2)
-          #   3. Auto-fallback: latest MT6000_cust_build dir for the same X.Y branch (mode 3)
+          # Resolved config.buildinfo ensures IB packages match manifest (no missing pkgs at make image).
+          # Priority: force_config_url > release_dir (modes 1&2) > Mode 3 fallback.
           if [[ -n "${FORCE_CONFIG_URL:-}" ]]; then
             CONFIG_URL="$FORCE_CONFIG_URL"
             echo "Using explicit force_config_url"
           elif [[ -n "${RELEASE_DIR:-}" ]]; then
             CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
           else
-            # Mode 3: release_dir resolved in discover step — fail if missing
             if [[ -z "${RELEASE_DIR:-}" ]]; then
               echo "::error::No release_dir available and no force_config_url set — cannot fetch config.buildinfo"
               exit 1
@@ -325,13 +301,7 @@ jobs:
           echo "Fetching config from: ${CONFIG_URL}"
           curl -fsSL "${CONFIG_URL}" -o .config
 
-          # ImageBuilder (standalone) + BPF/LLVM host toolchain overrides.
-          # CONFIG_IB_STANDALONE=y makes target/imagebuilder/Makefile copy ALL
-          # built .apk files into the IB tarball's packages/ dir (otherwise only
-          # base-files/libc/kernel get included), preserving pesa's patched
-          # builds. We then patch the two places standalone mode *disables* so
-          # that upstream-snapshot fallback still works — see the "Allow apk
-          # upstream fallback" step below.
+          # IB_STANDALONE=y copies all built .apks into tarball; patches/ fixes the APK fallback it breaks.
           echo "CONFIG_IB=y" >> .config
           echo "CONFIG_IB_STANDALONE=y" >> .config
           sed -i '/CONFIG_BPF_TOOLCHAIN/d;/CONFIG_USE_LLVM_HOST/d' .config
@@ -348,25 +318,14 @@ jobs:
 
           make defconfig
 
-          # Version pinning — done after defconfig so defaults can't overwrite.
-          # VERSION_NUMBER ↔ ASU branch key; VERSION_CODE ↔ pesa's actual
-          # rREV-HASH (parsed from release_dir; getver.sh can't compute it
-          # from a depth-1 clone and would yield r0-<7char-sha>).
+          # Version pinning after defconfig — getver.sh returns r0-* on depth-1 clone.
           sed -i '/^CONFIG_VERSION_NUMBER=/d;/^CONFIG_VERSION_REPO=/d;/^CONFIG_VERSION_CODE=/d' .config
           echo "CONFIG_VERSION_NUMBER=\"${ASU_VER}\"" >> .config
-          # VERSION_REPO points at the releases-branch directory that actually
-          # serves our per-version artifacts. Pair with the Containerfile's sed
-          # on include/feeds.mk that strips pesa's RELEASE_DIR segment, so the
-          # resolved URL is %U/targets/%S/packages/packages.adb = this base +
-          # /targets/mediatek/filogic/packages/packages.adb.
+          # VERSION_REPO: our releases-branch base; pairs with 002-feeds patch for correct feed URLs.
           echo "CONFIG_VERSION_REPO=\"https://raw.githubusercontent.com/${GITHUB_REPOSITORY}/releases/${ASU_VER}\"" >> .config
           if [[ -n "${REV_HASH}" ]]; then
             echo "CONFIG_VERSION_CODE=\"${REV_HASH}\"" >> .config
-            # scripts/getver.sh prefers a TOPDIR/version file over git-rev-list,
-            # which returns r0-<hash> on a shallow clone. REVISION flows through
-            # VERSION_SED_SCRIPT's %R into /etc/openwrt_release's DISTRIB_REVISION
-            # (distinct from %C=VERSION_CODE), so the CONFIG_VERSION_CODE pin
-            # alone wasn't enough.
+            # TOPDIR/version overrides getver.sh git path (broken on shallow clone).
             echo "$REV_HASH" > version
             echo "Pinned CONFIG_VERSION_CODE=${REV_HASH} and wrote TOPDIR/version"
           else
@@ -383,12 +342,10 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Write RSA keypair for build-time package signing
           printf '%s\n' "${PACKAGE_SIGNING_KEY}" > key-build.rsa
           chmod 600 key-build.rsa
           printf '%s\n' "${PACKAGE_SIGNING_KEY_PUB}" > key-build.rsa.pub
-
-          # Embed public key in firmware rootfs so APK trusts our packages on-device
+          # Embed public key in rootfs so APK trusts our packages on-device.
           mkdir -p files/etc/apk/keys
           cp key-build.rsa.pub files/etc/apk/keys/pesabuilder-signing.rsa.pub
 
@@ -397,16 +354,14 @@ jobs:
       - name: Pre-fetch linux-firmware via git-lfs
         working-directory: ${{ runner.temp }}/openwrt
         run: |
-          # pesa1234/linux-firmware uses git-lfs. OpenWrt's default download
-          # path strips LFS content, so we clone with LFS ourselves and stage
-          # the tarball in dl/ under the exact filename OpenWrt expects.
+          # pesa/linux-firmware uses git-lfs; clone directly so dl/ gets real content.
           PACKAGE_MK="package/firmware/linux-firmware/Makefile"
           if [ ! -f "$PACKAGE_MK" ]; then
             echo "Package makefile not found, skipping pre-fetch"
             exit 0
           fi
 
-          # Ask the build system for the resolved values instead of grepping
+          # Prefer build system resolved values over grepping Makefile.
           SOURCE=$(make --no-print-directory -C package/firmware/linux-firmware val.PKG_SOURCE V=s 2>/dev/null || true)
           VERSION=$(make --no-print-directory -C package/firmware/linux-firmware val.PKG_VERSION V=s 2>/dev/null || true)
           PKG_COMMIT=$(make --no-print-directory -C package/firmware/linux-firmware val.PKG_SOURCE_VERSION V=s 2>/dev/null || true)
@@ -460,7 +415,6 @@ jobs:
           cp -a linux-firmware-src/. "$SUBDIR/"
           rm -rf "$SUBDIR/.git" "$SUBDIR/.gitmodules"
 
-          # Create tarball with deterministic flags, matching the expected extension
           TAR_FLAGS="--numeric-owner --owner=0 --group=0 --mode=a-s --sort=name --mtime=$TAR_TIMESTAMP"
           case "$SOURCE" in
             *.tar.xz)  tar $TAR_FLAGS -cJf "$DL_DIR/$SOURCE" "$SUBDIR" ;;
@@ -474,8 +428,7 @@ jobs:
           ACTUAL_HASH=$(sha256sum "$DL_DIR/$SOURCE" | cut -d' ' -f1)
           echo "Created $SOURCE (sha256: $ACTUAL_HASH)"
           if [ -n "$MIRROR_HASH" ] && [ "$ACTUAL_HASH" != "$MIRROR_HASH" ]; then
-            echo "Hash differs from PKG_MIRROR_HASH — patching Makefile so make"
-            echo "download accepts our tarball (which has correct LFS content)."
+            # Patch Makefile so make download accepts our LFS-fetched tarball.
             sed -i "s/^PKG_MIRROR_HASH:=.*/PKG_MIRROR_HASH:=${ACTUAL_HASH}/" \
               "${{ runner.temp }}/openwrt/$PACKAGE_MK"
             echo "Patched PKG_MIRROR_HASH to $ACTUAL_HASH"
@@ -484,18 +437,12 @@ jobs:
       - name: Run make download
         working-directory: ${{ runner.temp }}/openwrt
         run: |
-          # Retry serially with verbose output if the parallel run fails
-          # (flaky mirrors are common).
-          make download -j$(nproc) || { echo "Retrying..."; sleep 60; make download -j1 V=s; }
+          make download -j$(nproc) || { echo "Retrying..."; sleep 60; make download -j1 V=s; } # retry with V=s on failure
 
       - name: Run make world
         working-directory: ${{ runner.temp }}/openwrt
         run: |
-          # Mirror build output to a log file so the failure healthcheck can
-          # send the tail to healthchecks.io.
-          exec > >(tee /tmp/openwrt-build.log) 2>&1
-          # Mirror build output to a log file so the failure healthcheck can
-          # send the tail to healthchecks.io.
+          exec > >(tee /tmp/openwrt-build.log) 2>&1 # tee to log for failure healthcheck
           make -j$(nproc) || { echo "Retrying..."; sleep 60; make -j1 V=s; }
 
       - name: Extract ImageBuilder tarball
@@ -513,13 +460,7 @@ jobs:
           TARGET="mediatek/filogic"
           STAGING="${{ runner.temp }}/pkg-staging"
 
-          # Match the on-disk layout ASU expects under releases/{version}/
-          # so the publish step is a plain rsync into the releases branch:
-          #
-          #   packages/${ARCH}/feeds.conf                — feed name list
-          #   packages/${ARCH}/{feed}/{index.json,*.apk} — per-feed APK feed
-          #   targets/${TARGET}/{profiles.json,*.manifest,*.buildinfo,sha256sums}
-          #   targets/${TARGET}/packages/{index.json,*.apk}  — target kmods
+          # Layout matches ASU's releases/{version}/ expectations.
           PKG_BASE=$(find "${OPENWRT}/bin" -type d -path "*packages/${ARCH}" | head -1)
           TARGET_BASE=$(find "${OPENWRT}/bin" -type d -path "*targets/${TARGET}" | head -1)
 
@@ -528,7 +469,6 @@ jobs:
 
           mkdir -p "${STAGING}/packages/${ARCH}" "${STAGING}/targets/${TARGET}/packages"
 
-          # Arch-wide feed packages (base, luci, packages, routing, etc.)
           if [ -n "${PKG_BASE}" ]; then
             for FEED_DIR in "${PKG_BASE}"/*/; do
               [ -d "${FEED_DIR}" ] || continue
@@ -541,9 +481,7 @@ jobs:
             done
           fi
 
-          # feeds.conf tells ASU which feeds to enumerate. Format: opkg-style
-          # three-column lines — ASU's parse_feeds_conf splits on whitespace
-          # and takes the second column, so only the feed name matters.
+          # feeds.conf: ASU reads feed name from col 2; other cols are placeholders.
           FEEDS_CONF="${STAGING}/packages/${ARCH}/feeds.conf"
           : > "${FEEDS_CONF}"
           for FEED_DIR in "${STAGING}/packages/${ARCH}"/*/; do
@@ -554,8 +492,7 @@ jobs:
           echo "Generated feeds.conf:"
           cat "${FEEDS_CONF}"
 
-          # Target kmods live under targets/${TARGET}/packages/ — ASU reads
-          # them from there, not from packages/${ARCH}/kmods.
+          # Target kmods under targets/${TARGET}/packages/ — ASU reads them there.
           if [ -n "${TARGET_BASE}" ] && [ -d "${TARGET_BASE}/packages" ]; then
             DEST="${STAGING}/targets/${TARGET}/packages"
             cp "${TARGET_BASE}/packages"/*.apk "${DEST}/" 2>/dev/null || true
@@ -563,8 +500,6 @@ jobs:
             cp "${TARGET_BASE}/packages"/index.json "${DEST}/" 2>/dev/null || true
           fi
 
-          # Target metadata (profiles.json, buildinfo, manifests) sits alongside
-          # the target's packages/ dir.
           if [ -n "${TARGET_BASE}" ]; then
             DEST="${STAGING}/targets/${TARGET}"
             for f in profiles.json config.buildinfo feeds.buildinfo version.buildinfo; do
@@ -573,8 +508,6 @@ jobs:
             cp "${TARGET_BASE}"/*.manifest "${DEST}/" 2>/dev/null || true
           fi
 
-          # sha256sums per package dir — not strictly required by ASU but useful
-          # for debugging and mirror integrity checks.
           (cd "${STAGING}/packages/${ARCH}" && \
             find . -name '*.apk' -o -name 'packages.adb' -o -name 'index.json' | \
             sort | xargs sha256sum > sha256sums) 2>/dev/null || true
@@ -593,7 +526,6 @@ jobs:
           echo "Staging layout:"
           find "${STAGING}" -maxdepth 4 -type d | sort
 
-          # Bundle for artifact handoff to containerize job
           tar -czf "$GITHUB_WORKSPACE/packages-staging.tar.gz" \
             -C "${STAGING}" .
 
@@ -604,13 +536,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          # The .manifest for the release we're rebuilding lists every package
-          # pesa baked into his firmware. Using it here guarantees parity with
-          # the config.buildinfo we just compiled against, so the resulting
-          # ImageBuilder's DEFAULT_PACKAGES can never reference a package the
-          # package repo doesn't have.
-          #
-          # release_dir is always set by discover (Mode 3 resolves fallback there).
+          # Manifest guarantees IB DEFAULT_PACKAGES matches built repo — no missing packages at make image.
           if [[ -z "${RELEASE_DIR:-}" ]]; then
             echo "::error::No release_dir — cannot fetch manifest"
             exit 1
@@ -627,8 +553,6 @@ jobs:
           curl -fsSL "${MANIFEST_URL}" | awk '{print $1}' | sort -u > "$GITHUB_WORKSPACE/firmware-packages.txt"
           echo "Packages in manifest: $(wc -l < "$GITHUB_WORKSPACE/firmware-packages.txt")"
 
-      # Four artifacts are uploaded separately so `containerize` can pull
-      # each by name without unpacking an aggregate bundle.
       - name: Upload artifact — firmware-packages
         uses: actions/upload-artifact@v5
         with:
@@ -664,9 +588,7 @@ jobs:
           COMMIT_SHA: ${{ needs.discover.outputs.commit_sha }}
           RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
         run: |
-          # Ship discover outputs alongside the other artifacts so the
-          # containerize workflow (separate file, possibly re-run later)
-          # doesn't have to re-derive them.
+          # Ship discover outputs so containerize can consume them without re-deriving.
           jq -n \
             --arg branch      "$BRANCH" \
             --arg asu_version "$ASU_VERSION" \
@@ -685,8 +607,7 @@ jobs:
 
       - name: Clean up OpenWrt build dir (preserve dl/ for cache)
         run: |
-          # actions/cache's post-step needs dl/ to still exist at its declared
-          # path. Everything else can go to free the runner.
+          # Preserve dl/ for cache post-step; rm everything else to free disk.
           if [ -d "${{ runner.temp }}/openwrt/dl" ] && [ ! -L "${{ runner.temp }}/openwrt/dl" ]; then
             mv "${{ runner.temp }}/openwrt/dl" "${{ runner.temp }}/openwrt-dl-cache"
           fi
@@ -699,8 +620,6 @@ jobs:
       - name: Healthcheck — fail (with build log tail)
         if: failure()
         run: |
-          # Tolerate failure: don't let a healthcheck ping outage mask the
-          # real build failure we're trying to report.
           LOG_TAIL=$(tail -c 8000 /tmp/openwrt-build.log 2>/dev/null || echo "No build log captured")
           curl -fsS -m 10 --retry 3 \
             --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
@@ -709,12 +628,10 @@ jobs:
       - name: Capture build log for Claude
         if: failure() && github.event_name != 'workflow_dispatch'
         run: |
-          # Write log to workspace so the action step can read it as a file
-          # (action `with:` prompts are static — can't inject shell variables).
+          # Write to workspace file — action with: prompts can't use shell vars.
           tail -c 10000 /tmp/openwrt-build.log > "$GITHUB_WORKSPACE/.failed-build-log.txt" 2>/dev/null \
             || echo "No build log (failure occurred before make world)" \
                > "$GITHUB_WORKSPACE/.failed-build-log.txt"
-          # Authenticate git so Claude can push a fix branch
           git config user.name  "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git remote set-url origin \
@@ -753,7 +670,4 @@ jobs:
                - What was changed and why it fixes it
                - The failed run URL
 
-# Containerize runs in a separate workflow (`containerize.yml`) so it can
-# be re-run on its own without re-doing the ~40min `make world`. It auto-
-# triggers on a successful build via workflow_run, and supports manual
-# re-run via workflow_dispatch with an optional build_run_id.
+# Containerize runs separately (containerize.yml) — re-runnable without re-doing make world.

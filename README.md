@@ -12,17 +12,17 @@ Given branch `next-r4.8.0.rss.mtk`:
 
 | Thing | Value |
 |---|---|
-| Firmware version string | `4.8-SNAPSHOT` |
-| Sysupgrae branch key | `4.8` | 
-| container tag | `mediatek-filogic-openwrt-4.8` |
-| Metadata path on `releases` branch | `4.8-SNAPSHOT/` |
+| Firmware version string | `4.8.0` |
+| Sysupgrade branch key | `4.8` |
+| Container tags | `mediatek-filogic-next-r4.8.0.rss.mtk`, `mediatek-filogic-v4.8.0` |
+| Metadata path on `releases` branch | `4.8.0/` |
 
 **Derivation:**
 ```
 next-r4.8.0.rss.mtk
-  → strip next-r, take first 2 parts   → 4.8          (ASU branch key)
-  → append -SNAPSHOT                   → 4.8-SNAPSHOT  (firmware version)
-  → strip -SNAPSHOT, prepend openwrt-  → openwrt-4.8   (container tag suffix)
+  → strip next-r, take first 3 parts   → 4.8.0  (firmware version / ASU version)
+  → take first 2 parts                 → 4.8    (ASU branch key in branches.json)
+  → prepend v                          → v4.8.0 (ASU-resolved container tag suffix)
 ```
 
 

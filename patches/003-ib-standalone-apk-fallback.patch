@@ -1,0 +1,24 @@
+--- a/target/imagebuilder/Makefile	2026-04-19 11:38:17.044000000 +0200
++++ b/target/imagebuilder/Makefile	2026-04-19 11:38:40.900000000 +0200
+@@ -45,10 +45,8 @@
+ 	$(INSTALL_DIR) $(PKG_BUILD_DIR)/packages
+ 
+ ifneq ($(CONFIG_USE_APK),)
+-  ifeq ($(CONFIG_IB_STANDALONE),)
+ 	$(call FeedSourcesAppendAPK,$(PKG_BUILD_DIR)/repositories)
+ 	$(VERSION_SED_SCRIPT) $(PKG_BUILD_DIR)/repositories
+-  endif
+ 
+ 	$(INSTALL_DATA) ./files/README.apk.md $(PKG_BUILD_DIR)/packages/README.md
+ else
+--- a/target/imagebuilder/files/Makefile	2026-04-19 11:38:17.544000000 +0200
++++ b/target/imagebuilder/files/Makefile	2026-04-19 11:38:40.900000000 +0200
+@@ -98,7 +98,7 @@
+ 
+ export APK_KEYS:=$(TOPDIR)/keys
+ APK:=$(call apk,$(TARGET_DIR)) \
+-	$(if $(CONFIG_IB_STANDALONE),,--repositories-file $(TOPDIR)/repositories) \
++	--repositories-file $(TOPDIR)/repositories \
+ 	--repository $(PACKAGE_DIR)/packages.adb \
+ 	$(if $(CONFIG_SIGNATURE_CHECK),,--allow-untrusted) \
+ 	--cache-dir $(DL_DIR)

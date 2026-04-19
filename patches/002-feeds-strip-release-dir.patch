@@ -1,0 +1,20 @@
+--- a/include/feeds.mk	2026-04-19 11:38:16.144000000 +0200
++++ b/include/feeds.mk	2026-04-19 11:38:40.896000000 +0200
+@@ -35,7 +35,7 @@
+ # 1: destination file
+ define FeedSourcesAppendOPKG
+ ( \
+-  echo 'src/gz %d_core %U/$(DATE)_$(VERSION_CODE)_$(BRANCH)/targets/%S/packages'; \
++  echo 'src/gz %d_core %U/targets/%S/packages'; \
+   $(strip $(if $(CONFIG_PER_FEED_REPO), \
+ 	echo 'src/gz %d_base $(OWRT_LINK)/packages/%A/base'; \
+ 	$(if $(CONFIG_BUILDBOT), \
+@@ -49,7 +49,7 @@
+ # 1: destination file
+ define FeedSourcesAppendAPK
+ ( \
+-  echo '%U/$(DATE)_$(VERSION_CODE)_$(BRANCH)/targets/%S/packages/packages.adb'; \
++  echo '%U/targets/%S/packages/packages.adb'; \
+   $(strip $(if $(CONFIG_PER_FEED_REPO), \
+ 	echo '$(OWRT_LINK)/%A/base/packages.adb'; \
+ 	$(if $(CONFIG_BUILDBOT), \

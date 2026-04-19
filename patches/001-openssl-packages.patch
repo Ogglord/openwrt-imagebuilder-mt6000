@@ -1,0 +1,31 @@
+--- a/target/linux/mediatek/filogic/target.mk	2026-04-19 11:38:18.092000000 +0200
++++ b/target/linux/mediatek/filogic/target.mk	2026-04-19 11:38:40.892000000 +0200
+@@ -2,7 +2,7 @@
+ SUBTARGET:=filogic
+ BOARDNAME:=Filogic 8x0 (MT798x)
+ CPU_TYPE:=cortex-a53
+-DEFAULT_PACKAGES += fitblk kmod-crypto-hw-safexcel wpad-basic-mbedtls uboot-envtools
++DEFAULT_PACKAGES += fitblk kmod-crypto-hw-safexcel wpad-openssl uboot-envtools
+ KERNELNAME:=Image dtbs
+ DEFAULT_PROFILE:=openwrt_one
+ 
+--- a/include/target.mk	2026-04-19 11:38:16.460000000 +0200
++++ b/include/target.mk	2026-04-19 11:38:40.896000000 +0200
+@@ -25,7 +25,7 @@
+ 	fstools \
+ 	libc \
+ 	libgcc \
+-	libustream-mbedtls \
++	libustream-openssl \
+ 	logd \
+ 	mtd \
+ 	netifd \
+--- a/include/default-packages.mk	2026-04-19 11:38:16.736000000 +0200
++++ b/include/default-packages.mk	2026-04-19 11:38:40.896000000 +0200
+@@ -1,5 +1,5 @@
+ ifneq ($(CONFIG_USE_APK),)
+-  DEFAULT_PACKAGES += apk-mbedtls
++  DEFAULT_PACKAGES += apk-openssl
+ else
+   DEFAULT_PACKAGES += opkg
+ endif

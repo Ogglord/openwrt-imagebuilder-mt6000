@@ -316,6 +316,10 @@ jobs:
           echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config
 
+          # Extra packages from extra-packages.txt — compiled into local repo, no upstream drift.
+          grep -v '^\s*#' "${GITHUB_WORKSPACE}/extra-packages.txt" | grep -v '^\s*$' | \
+            while read -r pkg; do echo "CONFIG_PACKAGE_${pkg}=y" >> .config; done
+
           make defconfig
 
           # Version pinning after defconfig — getver.sh returns r0-* on depth-1 clone.

@@ -1,0 +1,6 @@
+# Extra packages to compile into the IB's local package repo.
+# One package name per line. Comments and blank lines ignored.
+# Packages listed here won't fall back to upstream snapshots,
+# eliminating version drift in ASU-built firmware.
+sqm-scripts
+luci-app-attendedsysupgrade

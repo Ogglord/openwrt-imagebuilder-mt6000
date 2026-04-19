@@ -742,8 +742,10 @@ jobs:
             1. Read CLAUDE.md for pipeline context, then read .failed-build-log.txt.
             2. Identify the root cause from the log and the relevant workflow/source files.
             3. Apply the minimal fix to the workflow or source files in this repo.
-               If the root cause is in pesa's upstream (outside our control), add a
-               defensive workaround or guard to the affected workflow step instead.
+               If the root cause is a changed upstream file in pesa's repo that one of
+               our patches no longer applies cleanly to, regenerate that patch file in
+               patches/ (fetch the new upstream file, apply the transformation, write
+               the new diff) — do NOT revert to inline sed commands.
             4. Delete .failed-build-log.txt — it must not be committed.
             5. Create a fix branch: fix/auto-YYYYMMDD-<2-3-word-slug> (kebab-case).
             6. Commit and push. Then open a PR against main with:

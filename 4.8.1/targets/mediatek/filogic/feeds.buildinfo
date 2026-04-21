@@ -3,4 +3,4 @@ src-git luci https://github.com/pesa1234/luci.git^398eaebc9a249d9113a7e17a37eb6c
 src-git routing https://git.openwrt.org/feed/routing.git^57d286627119ad6f154777cd3d3d47e24e75ec6c
 src-git telephony https://git.openwrt.org/feed/telephony.git^e2c5adab62e25eddeff3e52d4678163f6c9a6c3a
 src-git video https://github.com/openwrt/video.git^d25cad605d8ce9ff536d85bdda2ad7eb2b83f883
-src-git luci_sso https://github.com/Ogglord/luci-sso-feed.git^74c83389f3f8ef5e2d3bab629fd081a2fdad414f
+src-git luci_sso https://github.com/Ogglord/luci-sso-feed.git^c5c9abe99b38b3bf7d6b35feeec97a42a677bfbd

@@ -6,3 +6,4 @@ sqm-scripts
 luci-app-attendedsysupgrade
 luci-sso
 luci-sso-crypto-openssl
+liblucihttp-ucode

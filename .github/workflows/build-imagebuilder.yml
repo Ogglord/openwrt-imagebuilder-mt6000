@@ -318,8 +318,10 @@ jobs:
           echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config
 
           # Extra packages from extra-packages.txt — compiled into local repo, no upstream drift.
+          # Use =m (compile only) not =y (compile+install) to avoid package/install failures
+          # when dependencies span feeds not included in the base firmware package index.
           grep -v '^\s*#' "${GITHUB_WORKSPACE}/extra-packages.txt" | grep -v '^\s*$' | \
-            while read -r pkg; do echo "CONFIG_PACKAGE_${pkg}=y" >> .config; done
+            while read -r pkg; do echo "CONFIG_PACKAGE_${pkg}=m" >> .config; done
 
           make defconfig
 

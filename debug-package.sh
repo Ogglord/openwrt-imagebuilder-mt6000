@@ -9,7 +9,7 @@ set -euo pipefail
 # Example: ./debug-package.sh package/firmware/linux-firmware
 
 PACKAGE="${1:-package/firmware/linux-firmware}"
-DEFAULT_BRANCH="next-r4.8.0.rss.mtk-test6.18"
+DEFAULT_BRANCH="next-r4.8.1.rss.mtk"
 BRANCH="${2:-$DEFAULT_BRANCH}"
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,7 +42,7 @@ RUN git clone --depth 1 -b "\${OPENWRT_BRANCH}" \\
 
 WORKDIR /openwrt
 
-RUN echo "src-git luci-sso https://github.com/Ogglord/luci-sso-feed.git" >> feeds.conf && \
+RUN echo "src-git luci_sso https://github.com/Ogglord/luci-sso-feed.git;main" >> feeds.conf.default && \\
     ./scripts/feeds update -a && ./scripts/feeds install -a
 
 RUN if echo "\${OPENWRT_BRANCH}" | grep -q "test6.18"; then \\
@@ -59,12 +59,14 @@ ENV TAR_OPTIONS=--no-same-owner
 ENV LC_ALL=C
 
 RUN make defconfig
+RUN make tools/install -j\$(nproc)
 EOF
 )
 
 echo "Building debug environment (uses cache if available)..."
 IMAGE_ID=$(echo "${CONTAINERFILE}" | podman build \
   --build-arg "OPENWRT_BRANCH=${BRANCH}" \
+  --cgroup-manager=cgroupfs \
   --file - \
   --quiet \
   "${SCRIPT_DIR}")
@@ -76,6 +78,7 @@ echo ""
 
 podman run --rm \
   --network=host \
+  --cgroup-manager=cgroupfs \
   -e FORCE_UNSAFE_CONFIGURE=1 \
   -e TAR_OPTIONS=--no-same-owner \
   -e LC_ALL=C \

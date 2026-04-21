@@ -250,7 +250,7 @@ jobs:
       - name: Update and install OpenWrt feeds
         working-directory: ${{ runner.temp }}/openwrt
         run: |
-          echo "src-git luci-sso https://github.com/Ogglord/luci-sso-feed.git" >> feeds.conf
+          echo "src-git luci_sso https://github.com/Ogglord/luci-sso-feed.git" >> feeds.conf
           ./scripts/feeds update -a
           ./scripts/feeds install -a
           ./scripts/feeds install -a

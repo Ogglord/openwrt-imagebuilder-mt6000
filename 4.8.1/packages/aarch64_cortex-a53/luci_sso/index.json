@@ -1,0 +1,8 @@
+{
+  "version": 2,
+  "architecture": "aarch64_cortex-a53",
+  "packages": {
+    "luci-sso": "1.0.0-r1",
+    "luci-sso-crypto-openssl": "1.0.0-r1"
+  }
+}

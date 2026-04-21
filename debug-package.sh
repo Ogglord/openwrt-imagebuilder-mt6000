@@ -42,7 +42,8 @@ RUN git clone --depth 1 -b "\${OPENWRT_BRANCH}" \\
 
 WORKDIR /openwrt
 
-RUN ./scripts/feeds update -a && ./scripts/feeds install -a
+RUN echo "src-git luci-sso https://github.com/Ogglord/luci-sso-feed.git" >> feeds.conf && \
+    ./scripts/feeds update -a && ./scripts/feeds install -a
 
 RUN if echo "\${OPENWRT_BRANCH}" | grep -q "test6.18"; then \\
       CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/config_file/test6.18/.config"; \\

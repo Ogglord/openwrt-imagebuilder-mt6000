@@ -269,16 +269,22 @@ jobs:
       - name: Link host build/staging caches (self-hosted)
         if: env.IS_GH_RUNNER == 'false'
         run: |
-          # staging_dir/host holds built host binaries (go, rust, cmake, python, etc.)
-          # build_dir/host holds .built/.configured/.prepared stamps needed to skip rebuild
-          # staging_dir/host/ccache is populated by CONFIG_CCACHE=y and caches cross-compiler output
+          # staging_dir/host + build_dir/host: tools/ + core package/ host binaries & stamps.
+          # staging_dir/hostpkg + build_dir/hostpkg: feeds/packages/ host items (go, rust, etc.) —
+          # routed here because IS_PACKAGE_BUILD=1 in rules.mk for feeds/packages paths.
+          # staging_dir/host/ccache is populated by CONFIG_CCACHE=y (covered by first link).
           OPENWRT="${{ runner.temp }}/openwrt"
-          mkdir -p "$HOME/.cache/openwrt-staging-host" "$HOME/.cache/openwrt-build-host"
+          for kind in staging-host build-host staging-hostpkg build-hostpkg; do
+            mkdir -p "$HOME/.cache/openwrt-$kind"
+          done
           mkdir -p "$OPENWRT/staging_dir" "$OPENWRT/build_dir"
-          ln -sfT "$HOME/.cache/openwrt-staging-host" "$OPENWRT/staging_dir/host"
-          ln -sfT "$HOME/.cache/openwrt-build-host" "$OPENWRT/build_dir/host"
-          echo "Linked staging_dir/host → $HOME/.cache/openwrt-staging-host ($(du -sh "$HOME/.cache/openwrt-staging-host" 2>/dev/null | cut -f1))"
-          echo "Linked build_dir/host → $HOME/.cache/openwrt-build-host ($(du -sh "$HOME/.cache/openwrt-build-host" 2>/dev/null | cut -f1))"
+          ln -sfT "$HOME/.cache/openwrt-staging-host"    "$OPENWRT/staging_dir/host"
+          ln -sfT "$HOME/.cache/openwrt-build-host"      "$OPENWRT/build_dir/host"
+          ln -sfT "$HOME/.cache/openwrt-staging-hostpkg" "$OPENWRT/staging_dir/hostpkg"
+          ln -sfT "$HOME/.cache/openwrt-build-hostpkg"   "$OPENWRT/build_dir/hostpkg"
+          for kind in staging-host build-host staging-hostpkg build-hostpkg; do
+            echo "Linked $kind → $HOME/.cache/openwrt-$kind ($(du -sh "$HOME/.cache/openwrt-$kind" 2>/dev/null | cut -f1))"
+          done
 
       - name: Cache staging_dir/host (GitHub-hosted)
         if: env.IS_GH_RUNNER == 'true'
@@ -299,6 +305,26 @@ jobs:
           restore-keys: |
             openwrt-build-host-${{ needs.discover.outputs.branch }}-
             openwrt-build-host-
+
+      - name: Cache staging_dir/hostpkg (GitHub-hosted)
+        if: env.IS_GH_RUNNER == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/openwrt/staging_dir/hostpkg
+          key: openwrt-staging-hostpkg-${{ needs.discover.outputs.branch }}-${{ needs.discover.outputs.commit_sha }}
+          restore-keys: |
+            openwrt-staging-hostpkg-${{ needs.discover.outputs.branch }}-
+            openwrt-staging-hostpkg-
+
+      - name: Cache build_dir/hostpkg (GitHub-hosted)
+        if: env.IS_GH_RUNNER == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/openwrt/build_dir/hostpkg
+          key: openwrt-build-hostpkg-${{ needs.discover.outputs.branch }}-${{ needs.discover.outputs.commit_sha }}
+          restore-keys: |
+            openwrt-build-hostpkg-${{ needs.discover.outputs.branch }}-
+            openwrt-build-hostpkg-
 
       - name: Update and install OpenWrt feeds
         working-directory: ${{ runner.temp }}/openwrt

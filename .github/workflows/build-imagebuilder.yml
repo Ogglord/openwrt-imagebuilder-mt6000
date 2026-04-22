@@ -247,6 +247,40 @@ jobs:
             openwrt-dl-${{ needs.discover.outputs.branch }}-
             openwrt-dl-
 
+      - name: Link host build/staging caches (self-hosted)
+        if: env.IS_GH_RUNNER == 'false'
+        run: |
+          # staging_dir/host holds built host binaries (go, rust, cmake, python, etc.)
+          # build_dir/host holds .built/.configured/.prepared stamps needed to skip rebuild
+          # staging_dir/host/ccache is populated by CONFIG_CCACHE=y and caches cross-compiler output
+          OPENWRT="${{ runner.temp }}/openwrt"
+          mkdir -p "$HOME/.cache/openwrt-staging-host" "$HOME/.cache/openwrt-build-host"
+          mkdir -p "$OPENWRT/staging_dir" "$OPENWRT/build_dir"
+          ln -sfT "$HOME/.cache/openwrt-staging-host" "$OPENWRT/staging_dir/host"
+          ln -sfT "$HOME/.cache/openwrt-build-host" "$OPENWRT/build_dir/host"
+          echo "Linked staging_dir/host → $HOME/.cache/openwrt-staging-host ($(du -sh "$HOME/.cache/openwrt-staging-host" 2>/dev/null | cut -f1))"
+          echo "Linked build_dir/host → $HOME/.cache/openwrt-build-host ($(du -sh "$HOME/.cache/openwrt-build-host" 2>/dev/null | cut -f1))"
+
+      - name: Cache staging_dir/host (GitHub-hosted)
+        if: env.IS_GH_RUNNER == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/openwrt/staging_dir/host
+          key: openwrt-staging-host-${{ needs.discover.outputs.branch }}-${{ needs.discover.outputs.commit_sha }}
+          restore-keys: |
+            openwrt-staging-host-${{ needs.discover.outputs.branch }}-
+            openwrt-staging-host-
+
+      - name: Cache build_dir/host (GitHub-hosted)
+        if: env.IS_GH_RUNNER == 'true'
+        uses: actions/cache@v5
+        with:
+          path: ${{ runner.temp }}/openwrt/build_dir/host
+          key: openwrt-build-host-${{ needs.discover.outputs.branch }}-${{ needs.discover.outputs.commit_sha }}
+          restore-keys: |
+            openwrt-build-host-${{ needs.discover.outputs.branch }}-
+            openwrt-build-host-
+
       - name: Update and install OpenWrt feeds
         working-directory: ${{ runner.temp }}/openwrt
         run: |
@@ -314,9 +348,18 @@ jobs:
           echo "Using LLVM_PATH: ${LLVM_PATH}"
           echo "CONFIG_BPF_TOOLCHAIN_HOST_PATH=\"${LLVM_PATH}\"" >> .config
 
-          # Disable packages we don't want / can't reliably build
-          echo "CONFIG_PACKAGE_nordvpnlite=n" >> .config
-          echo "CONFIG_PACKAGE_onionshare-cli=n" >> .config
+          # ccache wraps target+host gcc; cache dir defaults to staging_dir/host/ccache (persisted above).
+          sed -i '/^CONFIG_CCACHE[= ]/d;/^# CONFIG_CCACHE /d' .config
+          echo "CONFIG_CCACHE=y" >> .config
+
+          # Disable packages we don't want / can't reliably build.
+          # luci-app-nordvpnlite DEPENDS on nordvpnlite, which PKG_BUILD_DEPENDS on rust/host.
+          # Disabling only nordvpnlite is insufficient — defconfig re-enables it via the luci-app dep.
+          # Use `# CONFIG_X is not set` form (not =n) so defconfig treats it as hard constraint.
+          sed -i '/CONFIG_PACKAGE_nordvpnlite[= ]/d;/CONFIG_PACKAGE_luci-app-nordvpnlite[= ]/d;/CONFIG_PACKAGE_onionshare-cli[= ]/d' .config
+          echo "# CONFIG_PACKAGE_luci-app-nordvpnlite is not set" >> .config
+          echo "# CONFIG_PACKAGE_nordvpnlite is not set" >> .config
+          echo "# CONFIG_PACKAGE_onionshare-cli is not set" >> .config
 
           # Extra packages from extra-packages.txt — compiled into local repo, no upstream drift.
           # Use =m (compile only) not =y (compile+install) to avoid package/install failures

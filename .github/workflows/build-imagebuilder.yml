@@ -208,8 +208,22 @@ jobs:
             build-essential clang flex bison g++ gawk gcc-multilib \
             g++-multilib gettext git libncurses-dev libssl-dev \
             python3-setuptools rsync swig unzip \
-            zlib1g-dev file wget curl zstd
+            zlib1g-dev file wget curl zstd git-restore-mtime
           sudo apt-get autoremove -y && sudo apt-get clean -y
+
+      - name: Install git-restore-mtime (self-hosted)
+        if: env.IS_GH_RUNNER == 'false'
+        run: |
+          command -v git-restore-mtime >/dev/null && { echo "git-restore-mtime present"; exit 0; }
+          # Try apt first, fall back to downloading the single-file Python script.
+          if sudo -n apt-get install -y git-restore-mtime 2>/dev/null; then
+            exit 0
+          fi
+          mkdir -p "$HOME/.local/bin"
+          curl -fsSL -o "$HOME/.local/bin/git-restore-mtime" \
+            https://raw.githubusercontent.com/MestreLion/git-tools/main/git-restore-mtime
+          chmod +x "$HOME/.local/bin/git-restore-mtime"
+          echo "$HOME/.local/bin" >> "$GITHUB_PATH"
 
       - name: Clean self-hosted workspace
         if: env.IS_GH_RUNNER == 'false'
@@ -229,6 +243,11 @@ jobs:
           git fetch --depth 1 origin "$RELEASE_SHA"
           git checkout --quiet FETCH_HEAD
           echo "Checked out $(git rev-parse HEAD) on ${BRANCH}"
+          # find_md5 (include/depends.mk) hashes file mtimes into stamp filenames.
+          # Fresh clone gives every file current-time mtime → stamp hashes differ per run
+          # → cached build_dir stamps never match → rebuild from scratch.
+          # git-restore-mtime resets each file's mtime to its last-commit time → deterministic.
+          git restore-mtime --quiet || git-restore-mtime --quiet
 
       - name: Link dl/ to persistent cache (self-hosted)
         if: env.IS_GH_RUNNER == 'false'
@@ -287,6 +306,11 @@ jobs:
           cp feeds.conf.default feeds.conf
           echo "src-git luci_sso https://github.com/Ogglord/luci-sso-feed.git" >> feeds.conf
           ./scripts/feeds update -a
+          # Restore mtimes in every feed clone so find_md5 stamp hashes are deterministic.
+          for d in feeds/*/; do
+            [ -d "$d/.git" ] || continue
+            (cd "$d" && (git restore-mtime --quiet || git-restore-mtime --quiet)) || true
+          done
           ./scripts/feeds install -a
           ./scripts/feeds install -a
 
@@ -309,6 +333,9 @@ jobs:
           # MHZ19B missing in older commits; pre-populate to avoid syncconfig error in 6.18+.
           grep -q CONFIG_MHZ19B target/linux/generic/config-6.18 || \
             echo "# CONFIG_MHZ19B is not set" >> target/linux/generic/config-6.18
+
+          # git apply sets mtime to current — re-run restore-mtime so stamp hashes stay deterministic.
+          git restore-mtime --quiet || git-restore-mtime --quiet
 
       - name: Apply pesa's config.buildinfo
         working-directory: ${{ runner.temp }}/openwrt

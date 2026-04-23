@@ -1,5 +1,5 @@
 name: 1. Build ImageBuilder
-run-name: "Build ImageBuilder — ${{ inputs.force_commit && format('commit {0} ({1})', inputs.force_commit, inputs.force_branch_name) || inputs.force_branch || 'auto-discover' }} on ${{ inputs.runner || 'ubuntu-latest' }}"
+run-name: "Build ImageBuilder — ${{ inputs.force_branch || 'auto-discover' }} on ${{ inputs.runner || 'ubuntu-latest' }}"
 
 on:
   schedule:
@@ -7,19 +7,7 @@ on:
   workflow_dispatch:
     inputs:
       force_branch:
-        description: "Mode 2: force a specific branch from MT6000_cust_build (e.g. next-r4.8.0.rss.mtk-test6.18)"
-        required: false
-        type: string
-      force_commit:
-        description: "Mode 3: full SHA on pesa1234/openwrt — bypasses MT6000_cust_build entirely"
-        required: false
-        type: string
-      force_branch_name:
-        description: "Mode 3: branch name to use with force_commit (e.g. next-r4.8.1.rss.mtk)"
-        required: false
-        type: string
-      force_config_url:
-        description: "Mode 3: optional config.buildinfo URL override (auto-falls back to latest same-X.Y if blank)"
+        description: "Force a specific branch from MT6000_cust_build (e.g. next-r4.8.0.rss.mtk-test6.18); blank = auto-discover latest"
         required: false
         type: string
       runner:
@@ -51,63 +39,10 @@ jobs:
         id: discover
         env:
           FORCE_BRANCH: ${{ inputs.force_branch }}
-          FORCE_COMMIT: ${{ inputs.force_commit }}
-          FORCE_BRANCH_NAME: ${{ inputs.force_branch_name }}
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
-          # Strip next-r prefix, take first 3 version components.
-          derive_asu_version() {
-            echo "$1" | sed 's/^next-r//' | cut -d. -f1,2,3
-          }
-
-          # ── Mode 3: force_commit — bypass MT6000_cust_build entirely ──────────
-          if [[ -n "${FORCE_COMMIT:-}" ]]; then
-            if [[ -z "${FORCE_BRANCH_NAME:-}" ]]; then
-              echo "::error::force_commit requires force_branch_name to be set"
-              exit 1
-            fi
-            BRANCH="$FORCE_BRANCH_NAME"
-            LATEST_SHA="$FORCE_COMMIT"
-            ASU_VER=$(derive_asu_version "$BRANCH")
-
-            # rREV-HASH via compare API — avoids shallow-clone trap; REBOOT is getver.sh's count origin.
-            REBOOT_SHA="ee53a240ac902dc83209008a2671e7fdcf55957a"
-            AHEAD=$(gh api "repos/pesa1234/openwrt/compare/${REBOOT_SHA}...${LATEST_SHA}" --jq .ahead_by)
-            SHORT_HASH="${LATEST_SHA:0:10}"
-            REV_HASH="r${AHEAD}-${SHORT_HASH}"
-
-            # Resolve fallback release_dir for config/manifest steps.
-            XY=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
-            RELEASE_DIR=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
-              -H "Accept: application/vnd.github.v3+json" | \
-              jq -r '.[] | select(.type == "dir") | .name' | \
-              grep -E '^[0-9]{4}' | grep "next-r${XY}\." | sort | tail -1 || true)
-            if [[ -z "$RELEASE_DIR" ]]; then
-              echo "::warning::No fallback release dir for X.Y=${XY} in MT6000_cust_build — config/manifest steps must use force_config_url"
-              RELEASE_DIR=""
-            else
-              echo "Mode 3 fallback release dir: ${RELEASE_DIR}"
-            fi
-
-            echo "Mode:        force_commit"
-            echo "Branch:      ${BRANCH}"
-            echo "Commit SHA:  ${LATEST_SHA}"
-            echo "ASU version: ${ASU_VER}"
-            echo "Rev hash:    ${REV_HASH}"
-
-            # Mode 3 skips ALREADY_BUILT — caller explicitly chose the commit.
-            echo "new_commits=true"     >> "$GITHUB_OUTPUT"
-            echo "branch=${BRANCH}"     >> "$GITHUB_OUTPUT"
-            echo "asu_version=${ASU_VER}" >> "$GITHUB_OUTPUT"
-            echo "commit_sha=${LATEST_SHA}" >> "$GITHUB_OUTPUT"
-            echo "rev_hash=${REV_HASH}" >> "$GITHUB_OUTPUT"
-            echo "release_dir=${RELEASE_DIR}" >> "$GITHUB_OUTPUT"
-            exit 0
-          fi
-
-          # ── Modes 1 & 2: discover from MT6000_cust_build ─────────────────────
           DIRS=$(curl -fsSL "https://api.github.com/repos/pesa1234/MT6000_cust_build/contents/" \
             -H "Accept: application/vnd.github.v3+json" | \
             jq -r '.[] | select(.type == "dir") | .name' | \
@@ -119,18 +54,16 @@ jobs:
             exit 1
           fi
 
-          # Mode 2: force_branch — pick latest dir for that branch
-          # Mode 1: auto — pick absolute latest dir (test branches included)
           if [[ -n "${FORCE_BRANCH:-}" ]]; then
             RELEASE_DIR=$(echo "$DIRS" | grep -E "_${FORCE_BRANCH}$" | sort | tail -1 || true)
             if [[ -z "$RELEASE_DIR" ]]; then
               echo "::error::No release dir for branch '${FORCE_BRANCH}' in MT6000_cust_build"
               exit 1
             fi
-            echo "Mode: force_branch (${FORCE_BRANCH})"
+            echo "Branch filter: ${FORCE_BRANCH}"
           else
             RELEASE_DIR=$(echo "$DIRS" | sort | tail -1)
-            echo "Mode: auto-discover"
+            echo "Auto-discovering latest release dir"
           fi
 
           # Parse: YYYY-MM-DD_rREV-HASH_BRANCH  (hash is short, branch may contain hyphens)
@@ -158,7 +91,7 @@ jobs:
             exit 0
           fi
 
-          ASU_VER=$(derive_asu_version "$BRANCH")
+          ASU_VER=$(echo "$BRANCH" | sed 's/^next-r//' | cut -d. -f1,2,3)
           REV_HASH=$(echo "$RELEASE_DIR" | grep -oE 'r[0-9]+-[a-f0-9]+' | head -1)
 
           echo "new_commits=true"       >> "$GITHUB_OUTPUT"
@@ -183,9 +116,6 @@ jobs:
       TAR_OPTIONS: --no-same-owner
 
     steps:
-      - name: Healthcheck — start
-        run: curl -fsS -m 10 --retry 3 "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/start" || true # tolerate failure
-
       - uses: actions/checkout@v5
 
       - name: Free disk space (GitHub-hosted)
@@ -366,30 +296,15 @@ jobs:
         working-directory: ${{ runner.temp }}/openwrt
         env:
           RELEASE_DIR: ${{ needs.discover.outputs.release_dir }}
-          FORCE_CONFIG_URL: ${{ inputs.force_config_url }}
           BRANCH: ${{ needs.discover.outputs.branch }}
           ASU_VER: ${{ needs.discover.outputs.asu_version }}
           REV_HASH: ${{ needs.discover.outputs.rev_hash }}
           GH_TOKEN: ${{ github.token }}
         run: |
-          # Resolved config.buildinfo ensures IB packages match manifest (no missing pkgs at make image).
-          # Priority: force_config_url > release_dir (modes 1&2) > Mode 3 fallback.
-          if [[ -n "${FORCE_CONFIG_URL:-}" ]]; then
-            CONFIG_URL="$FORCE_CONFIG_URL"
-            echo "Using explicit force_config_url"
-          elif [[ -n "${RELEASE_DIR:-}" ]]; then
-            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
-          else
-            if [[ -z "${RELEASE_DIR:-}" ]]; then
-              echo "::error::No release_dir available and no force_config_url set — cannot fetch config.buildinfo"
-              exit 1
-            fi
-            CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
-          fi
+          CONFIG_URL="https://raw.githubusercontent.com/pesa1234/MT6000_cust_build/refs/heads/main/${RELEASE_DIR}/targets/mediatek/filogic/config.buildinfo"
           echo "Fetching config from: ${CONFIG_URL}"
           curl -fsSL "${CONFIG_URL}" -o .config
 
-          # IB_STANDALONE=y copies all built .apks into tarball; patches/ fixes the APK fallback it breaks.
           echo "CONFIG_IB=y" >> .config
           echo "CONFIG_IB_STANDALONE=y" >> .config
           echo "CONFIG_SDK=y" >> .config
@@ -673,25 +588,13 @@ jobs:
           path: firmware-packages.txt
           retention-days: 14
 
-      - name: Upload artifact — profiles.json
+      - name: Upload artifact — build-tarballs
         uses: actions/upload-artifact@v5
         with:
-          name: profiles-json
-          path: ${{ runner.temp }}/pkg-staging/targets/mediatek/filogic/profiles.json
-          retention-days: 14
-
-      - name: Upload artifact — ImageBuilder tarball
-        uses: actions/upload-artifact@v5
-        with:
-          name: imagebuilder-tarball
-          path: "*imagebuilder*.tar.*"
-          retention-days: 14
-
-      - name: Upload artifact — SDK tarball
-        uses: actions/upload-artifact@v5
-        with:
-          name: sdk-tarball
-          path: "*sdk*.tar.*"
+          name: build-tarballs
+          path: |
+            *imagebuilder*.tar.*
+            *sdk*.tar.*
           retention-days: 14
           if-no-files-found: warn
 
@@ -737,14 +640,6 @@ jobs:
             mkdir -p ${{ runner.temp }}/openwrt
             mv "${{ runner.temp }}/openwrt-dl-cache" "${{ runner.temp }}/openwrt/dl"
           fi
-
-      - name: Healthcheck — fail (with build log tail)
-        if: failure()
-        run: |
-          LOG_TAIL=$(tail -c 8000 /tmp/openwrt-build.log 2>/dev/null || echo "No build log captured")
-          curl -fsS -m 10 --retry 3 \
-            --data-binary "Build failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }} ${LOG_TAIL}" \
-            "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
 
       - name: Capture build log for Claude
         if: failure() && github.event_name != 'workflow_dispatch'

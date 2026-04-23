@@ -21,21 +21,13 @@ This repo has no application source — the `Containerfile` wraps a pre-built Im
 
 ## CI pipeline (`.github/workflows/`)
 
-Pipeline runs weekly on Sunday 04:00 UTC or on manual dispatch. Split across
-four workflows chained via `workflow_run`:
+Pipeline runs weekly on Sunday 04:00 UTC or on manual dispatch. Two workflows chained via `workflow_run`:
 
-1. **`build-imagebuilder.yml`** — three trigger modes:
-   - **Mode 1 (auto/scheduled)**: `discover` job lists all directories in [pesa1234/MT6000_cust_build](https://github.com/pesa1234/MT6000_cust_build) (named `{date}_r{revision}-{commit-hash}_{branch}`), picks the absolute latest (including test branches), resolves to full SHA. Skips if already built.
-   - **Mode 2 (`force_branch`)**: same as auto but filters to a specific branch suffix (e.g. `next-r4.8.0.rss.mtk-test6.18`). Never skips already-built check.
-   - **Mode 3 (`force_commit` + `force_branch_name`)**: bypasses MT6000_cust_build entirely. Caller provides the full SHA on `pesa1234/openwrt` and the branch name. `REV_HASH` is derived via GitHub compare API (avoids shallow-clone trap). `config.buildinfo` and manifest fall back to the most recent MT6000_cust_build dir for the same X.Y prefix; override with `force_config_url`.
-   
-   `build` job does a **depth-1 fetch of that specific commit**, pulls `config.buildinfo` as `.config`, appends `CONFIG_IB=y` + `CONFIG_IB_STANDALONE=y` + a few tweaks, runs `make world`. Also downloads the matching `.manifest` as `firmware-packages.txt`. Uploads five artifacts (retention 14d): `imagebuilder-tarball`, `packages-staging`, `firmware-packages`, `profiles-json`, `build-meta` (JSON with discover outputs).
-2. **`containerize.yml`** — auto-triggers on successful Build ImageBuilder via `workflow_run`; also manually runnable via `workflow_dispatch` with an optional `build_run_id` input (blank = latest successful build). Downloads the above artifacts from the specified run, publishes packages + metadata under `{version}/` on the `releases` branch, builds the slim runtime container (Containerfile bakes `firmware-packages.txt` into `DEFAULT_PACKAGES` so `make image` produces pesa-parity firmware without `PACKAGES=`), pushes to GHCR, and creates a GitHub release recording the built commit. Split out so the ~2min container step can be re-run without re-doing the ~40min `make world`.
-3. **`publish-branches.yml`** — triggered by Containerize completion; rebuilds `branches.json` on the `releases` branch from existing GH releases so the ASU server can discover available builds.
-4. **`healthchecks.yml`** — pings healthchecks.io on Containerize completion (success/fail). Build-only failures are already reported by the in-workflow ping step inside `build-imagebuilder.yml`. Requires the `HEALTHCHECK_BUILD_UUID` repo secret.
-5. **`build-firmware.yml`** — supplemental firmware image builds (distinct from the ImageBuilder container).
+1. **`build-imagebuilder.yml`** — `discover` job lists all directories in [pesa1234/MT6000_cust_build](https://github.com/pesa1234/MT6000_cust_build) (named `{date}_r{revision}-{commit-hash}_{branch}`), picks the absolute latest (or filters to `force_branch` if set), resolves to full SHA. Skips if already built (auto mode only). `build` job does a **depth-1 fetch of that specific commit**, pulls `config.buildinfo` as `.config`, appends `CONFIG_IB=y` + `CONFIG_IB_STANDALONE=y` + a few tweaks, runs `make world`. Uploads four artifacts (retention 14d): `build-tarballs` (imagebuilder + sdk), `packages-staging`, `firmware-packages`, `build-meta` (JSON with discover outputs).
+2. **`containerize.yml`** ("Containerize & Publish") — auto-triggers on successful Build ImageBuilder via `workflow_run`; also manually runnable via `workflow_dispatch` with optional `build_run_id` and `branch_filter` inputs. Downloads artifacts, publishes packages + metadata under `{version}/` on the `releases` branch, builds the slim runtime container (Containerfile bakes `firmware-packages.txt` into `DEFAULT_PACKAGES`), pushes to GHCR, creates a GitHub release, then rebuilds `branches.json` / `.versions.json` / `.targets.json` on the `releases` branch.
+3. **`build-firmware.yml`** — supplemental firmware image builds (distinct from the ImageBuilder container).
 
-Secrets required: `HEALTHCHECK_BUILD_UUID`, `PACKAGE_SIGNING_KEY` (RSA private key), `PACKAGE_SIGNING_KEY_PUB`.
+Secrets required: `PACKAGE_SIGNING_KEY` (RSA private key), `PACKAGE_SIGNING_KEY_PUB`.
 
 ## Version / naming contract
 

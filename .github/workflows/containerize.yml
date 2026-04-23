@@ -1,13 +1,13 @@
-name: 2. Containerize
+name: 2. Containerize & Publish
 run-name: "Containerize — ${{ github.event.workflow_run.display_title || inputs.build_run_id || 'latest successful build' }}"
 
 # Split out of build-imagebuilder.yml so the ~2min container step can be
 # re-run independently of the ~40min `make world`. Two triggers:
 #
 #  - workflow_run on a successful Build ImageBuilder run → auto-containerize
-#    with artifacts from that run.
-#  - workflow_dispatch → manual, takes an optional build_run_id; empty
-#    means "latest successful Build ImageBuilder run".
+#    with artifacts from that run, then rebuild branches.json.
+#  - workflow_dispatch → manual; build_run_id selects the build (blank =
+#    latest successful); branch_filter scopes the metadata publish.
 on:
   workflow_run:
     workflows: ["1. Build ImageBuilder"]
@@ -16,6 +16,10 @@ on:
     inputs:
       build_run_id:
         description: "Build run ID to containerize (blank = latest successful)"
+        required: false
+        type: string
+      branch_filter:
+        description: "Only include a specific branch key in metadata publish (blank = all)"
         required: false
         type: string
 
@@ -73,19 +77,19 @@ jobs:
           # Check if the build actually produced artifacts — it may have been
           # skipped (already built). Exit cleanly rather than failing on a missing artifact.
           ARTIFACT_COUNT=$(gh api "repos/${{ github.repository }}/actions/runs/${RUN_ID}/artifacts" \
-            --jq '[.artifacts[] | select(.name == "imagebuilder-tarball")] | length')
+            --jq '[.artifacts[] | select(.name == "build-tarballs")] | length')
           if [[ "$ARTIFACT_COUNT" -eq 0 ]]; then
-            echo "No imagebuilder-tarball artifact in run ${RUN_ID} — build was skipped (already built). Nothing to containerize."
+            echo "No build-tarballs artifact in run ${RUN_ID} — build was skipped (already built). Nothing to containerize."
             echo "skip=true" >> "$GITHUB_OUTPUT"
           else
             echo "skip=false" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Download artifact — ImageBuilder tarball
+      - name: Download artifact — build-tarballs
         if: steps.resolve.outputs.skip != 'true'
         uses: actions/download-artifact@v5
         with:
-          name: imagebuilder-tarball
+          name: build-tarballs
           run-id: ${{ steps.resolve.outputs.run_id }}
           github-token: ${{ github.token }}
 
@@ -105,14 +109,6 @@ jobs:
           # overwriting the committed fallback used by build-firmware.yml.
           name: firmware-packages
           path: .
-          run-id: ${{ steps.resolve.outputs.run_id }}
-          github-token: ${{ github.token }}
-
-      - name: Download artifact — SDK tarball
-        if: steps.resolve.outputs.skip != 'true'
-        uses: actions/download-artifact@v5
-        with:
-          name: sdk-tarball
           run-id: ${{ steps.resolve.outputs.run_id }}
           github-token: ${{ github.token }}
 
@@ -235,10 +231,125 @@ jobs:
       # (staged under releases/{version}/targets/mediatek/filogic/) so no
       # separate API PUT is needed.
 
-      - name: Healthcheck — fail (containerize)
-        if: failure()
+  publish-metadata:
+    needs: containerize
+    if: ${{ !cancelled() && needs.containerize.result != 'failure' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Rebuild branches.json and metadata on releases branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          BRANCH_FILTER: ${{ inputs.branch_filter }}
         run: |
-          # Tolerate failure (see start ping in build-imagebuilder.yml).
-          curl -fsS -m 10 --retry 3 \
-            --data-binary "Containerize failed: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}" \
-            "https://hc-ping.com/${{ secrets.HEALTHCHECK_BUILD_UUID }}/fail" || true
+          set -euo pipefail
+
+          # Dedupe by X.Y key — keep most-recently published release per key.
+          RELEASES=$(gh api "repos/${{ github.repository }}/releases" --paginate \
+            | jq -r '
+              [.[]
+                | select(.tag_name | startswith("mediatek-filogic-"))
+                | {pesa: (.tag_name | sub("^mediatek-filogic-"; "")),
+                   published_at}]
+              | group_by(.pesa | sub("^next-r"; "") | split(".") | .[0:2] | join("."))
+              | map(sort_by(.published_at) | last | .pesa)
+              | .[]
+            ' || true)
+
+          if [[ -z "$RELEASES" ]]; then
+            echo "No releases found — nothing to publish"
+            exit 0
+          fi
+
+          if [[ -n "${BRANCH_FILTER:-}" ]]; then
+            RELEASES=$(echo "$RELEASES" | grep "^${BRANCH_FILTER}$" || true)
+            if [[ -z "$RELEASES" ]]; then
+              echo "No matching releases for filter '${BRANCH_FILTER}'"
+              exit 0
+            fi
+          fi
+
+          ARCH="aarch64_cortex-a53"
+          mkdir -p entries-out targets-out
+
+          while IFS= read -r PESA_BRANCH; do
+            ASU_KEY=$(echo "$PESA_BRANCH" | sed 's/^next-r//' | cut -d. -f1,2)
+            ASU_VER=$(echo "$PESA_BRANCH" | sed 's/^next-r//' | cut -d. -f1,2,3)
+            echo "Processing: ${PESA_BRANCH} → key=${ASU_KEY} ver=${ASU_VER}"
+
+            jq -n \
+              --arg key "$ASU_KEY" \
+              --arg ver "$ASU_VER" \
+              --arg arch "$ARCH" \
+              '{
+                ($key): {
+                  name: $ver,
+                  version: $ver,
+                  enabled: true,
+                  snapshot: false,
+                  path: "{version}",
+                  path_packages: "DEPRECATED",
+                  package_changes: [],
+                  targets: {"mediatek/filogic": $arch}
+                }
+              }' > "entries-out/entry-${ASU_KEY}.json"
+
+            jq -n --arg arch "$ARCH" '{"mediatek/filogic": $arch}' \
+              > "targets-out/${ASU_VER}.targets.json"
+          done <<< "$RELEASES"
+
+          jq -s 'add | to_entries | sort_by(.key) | from_entries' entries-out/entry-*.json \
+            > branches.json
+          echo "branches.json:"
+          cat branches.json
+
+          VERSIONS=$(jq -r '[.[].version] | .[]' branches.json | sort -rV)
+          LATEST=$(echo "$VERSIONS" | head -1)
+          jq -n \
+            --arg upcoming "$LATEST" \
+            --arg stable   "$LATEST" \
+            --argjson versions_list "$(echo "$VERSIONS" | jq -R . | jq -sc .)" \
+            '{upcoming_version:$upcoming, stable_version:$stable, oldstable_version:"", versions_list:$versions_list}' \
+            > .versions.json
+
+          # Ensure releases branch exists before cloning.
+          gh api "repos/${{ github.repository }}/git/refs/heads/releases" 2>/dev/null || \
+            gh api "repos/${{ github.repository }}/git/refs" \
+              --method POST \
+              --field ref="refs/heads/releases" \
+              --field sha="$(git rev-parse HEAD)"
+
+          git clone --depth=1 --branch=releases \
+            "https://x-access-token:${GH_TOKEN}@github.com/${{ github.repository }}.git" \
+            /tmp/releases-branch
+
+          cd /tmp/releases-branch
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+          cp "$GITHUB_WORKSPACE/branches.json" branches.json
+          cp "$GITHUB_WORKSPACE/.versions.json" .versions.json
+          git add branches.json .versions.json
+
+          for targets_file in "$GITHUB_WORKSPACE"/targets-out/*.targets.json; do
+            VER=$(basename "$targets_file" .targets.json)
+            mkdir -p "${VER}"
+            cp "$targets_file" "${VER}/.targets.json"
+            git add "${VER}/.targets.json"
+          done
+
+          git diff --cached --quiet && echo "No changes to publish" && exit 0
+          git commit -m "ci: publish branches.json and metadata"
+
+          for i in 1 2 3; do
+            git push origin releases && break
+            echo "Push failed (attempt $i), retrying..."
+            sleep 10
+            git pull --rebase origin releases
+          done
+
+          echo "=== Metadata published ==="
+          echo "URL: https://raw.githubusercontent.com/${{ github.repository }}/releases/.versions.json"

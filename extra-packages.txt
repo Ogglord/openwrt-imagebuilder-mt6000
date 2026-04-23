@@ -4,6 +4,4 @@
 # eliminating version drift in ASU-built firmware.
 sqm-scripts
 luci-app-attendedsysupgrade
-luci-sso
-luci-sso-crypto-openssl
 liblucihttp-ucode

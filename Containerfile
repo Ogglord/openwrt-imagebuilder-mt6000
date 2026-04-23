@@ -26,11 +26,11 @@ RUN mkdir -p /builder && \
       -e 's/CONFIG_DEFAULT_libustream-mbedtls=y/CONFIG_DEFAULT_libustream-openssl=y/' \
       -e 's/CONFIG_DEFAULT_wpad-basic-mbedtls=y/CONFIG_DEFAULT_wpad-openssl=y/' \
       /builder/.config && \
-    # Custom feeds don't exist on downloads.openwrt.org — remove from distfeeds
-    # generation (CONFIG_FEED_*) and build-time repo list (repositories file).
-    # Packages remain in IB's packages/ dir so make image still resolves them.
-    sed -i '/^CONFIG_FEED_luci_sso/d' /builder/.config && \
-    sed -i '/luci_sso/d' /builder/repositories && \
+    # luci_sso: external pre-built feed — not compiled locally.
+    # Add to repositories (make image resolution) and customfeeds.list (firmware runtime).
+    echo 'https://ogglord.github.io/openwrt-aarch64-feed/packages/aarch64_cortex-a53/luci_sso/packages.adb' >> /builder/repositories && \
+    mkdir -p /builder/files/etc/apk/repositories.d && \
+    echo 'https://ogglord.github.io/openwrt-aarch64-feed/packages/aarch64_cortex-a53/luci_sso/packages.adb' > /builder/files/etc/apk/repositories.d/customfeeds.list && \
     # Refuse to run against an IB tarball that still has pesa's RELEASE_DIR
     # segment in its distfeeds template — step 1 of our CI is supposed to strip
     # it from include/feeds.mk before make world so $(TOPDIR)/repositories (also

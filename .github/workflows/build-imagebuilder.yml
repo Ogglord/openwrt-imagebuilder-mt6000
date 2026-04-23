@@ -330,7 +330,6 @@ jobs:
         working-directory: ${{ runner.temp }}/openwrt
         run: |
           cp feeds.conf.default feeds.conf
-          echo "src-git luci_sso https://github.com/Ogglord/luci-sso-feed.git" >> feeds.conf
           ./scripts/feeds update -a
           # Restore mtimes in every feed clone so find_md5 stamp hashes are deterministic.
           for d in feeds/*/; do

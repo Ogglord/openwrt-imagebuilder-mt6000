@@ -108,6 +108,14 @@ jobs:
           run-id: ${{ steps.resolve.outputs.run_id }}
           github-token: ${{ github.token }}
 
+      - name: Download artifact — SDK tarball
+        if: steps.resolve.outputs.skip != 'true'
+        uses: actions/download-artifact@v5
+        with:
+          name: sdk-tarball
+          run-id: ${{ steps.resolve.outputs.run_id }}
+          github-token: ${{ github.token }}
+
       - name: Download artifact — build-meta
         if: steps.resolve.outputs.skip != 'true'
         uses: actions/download-artifact@v5
@@ -220,7 +228,8 @@ jobs:
           **Version:** ${VERSION}
           **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
           **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/${VERSION}/packages/" \
-            packages-staging.tar.gz
+            packages-staging.tar.gz \
+            *sdk*.tar.*
 
       # profiles.json is already included in the git-based publish above
       # (staged under releases/{version}/targets/mediatek/filogic/) so no

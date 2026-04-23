@@ -392,6 +392,7 @@ jobs:
           # IB_STANDALONE=y copies all built .apks into tarball; patches/ fixes the APK fallback it breaks.
           echo "CONFIG_IB=y" >> .config
           echo "CONFIG_IB_STANDALONE=y" >> .config
+          echo "CONFIG_SDK=y" >> .config
           sed -i '/CONFIG_BPF_TOOLCHAIN/d;/CONFIG_USE_LLVM_HOST/d' .config
           echo "CONFIG_BPF_TOOLCHAIN_HOST=y" >> .config
           echo "CONFIG_USE_LLVM_HOST=y" >> .config
@@ -548,12 +549,21 @@ jobs:
           exec > >(tee /tmp/openwrt-build.log) 2>&1 # tee to log for failure healthcheck
           make -j$(nproc) || { echo "Retrying..."; sleep 60; make -j1 V=s; }
 
-      - name: Extract ImageBuilder tarball
+      - name: Extract ImageBuilder and SDK tarballs
         run: |
           TARBALL=$(find ${{ runner.temp }}/openwrt/bin -name "*imagebuilder*.tar.*" | head -1)
-          echo "Found: $TARBALL"
+          echo "Found ImageBuilder: $TARBALL"
           cp "$TARBALL" "$GITHUB_WORKSPACE/"
           ls -lh "$GITHUB_WORKSPACE/"*imagebuilder*.tar.*
+
+          SDK=$(find ${{ runner.temp }}/openwrt/bin -name "*sdk*.tar.*" | head -1)
+          if [ -n "$SDK" ]; then
+            echo "Found SDK: $SDK"
+            cp "$SDK" "$GITHUB_WORKSPACE/"
+            ls -lh "$GITHUB_WORKSPACE/"*sdk*.tar.*
+          else
+            echo "::warning::SDK tarball not found — CONFIG_SDK=y may not have taken effect"
+          fi
 
       - name: Stage packages and target metadata for publish
         run: |
@@ -676,6 +686,14 @@ jobs:
           name: imagebuilder-tarball
           path: "*imagebuilder*.tar.*"
           retention-days: 14
+
+      - name: Upload artifact — SDK tarball
+        uses: actions/upload-artifact@v5
+        with:
+          name: sdk-tarball
+          path: "*sdk*.tar.*"
+          retention-days: 14
+          if-no-files-found: warn
 
       - name: Upload artifact — packages-staging
         uses: actions/upload-artifact@v5

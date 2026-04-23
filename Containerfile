@@ -26,6 +26,11 @@ RUN mkdir -p /builder && \
       -e 's/CONFIG_DEFAULT_libustream-mbedtls=y/CONFIG_DEFAULT_libustream-openssl=y/' \
       -e 's/CONFIG_DEFAULT_wpad-basic-mbedtls=y/CONFIG_DEFAULT_wpad-openssl=y/' \
       /builder/.config && \
+    # Custom feeds don't exist on downloads.openwrt.org — remove from distfeeds
+    # generation (CONFIG_FEED_*) and build-time repo list (repositories file).
+    # Packages remain in IB's packages/ dir so make image still resolves them.
+    sed -i '/^CONFIG_FEED_luci_sso/d' /builder/.config && \
+    sed -i '/luci_sso/d' /builder/repositories && \
     # Refuse to run against an IB tarball that still has pesa's RELEASE_DIR
     # segment in its distfeeds template — step 1 of our CI is supposed to strip
     # it from include/feeds.mk before make world so $(TOPDIR)/repositories (also

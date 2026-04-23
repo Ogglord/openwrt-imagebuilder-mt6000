@@ -10,6 +10,11 @@ on:
         description: "Force a specific branch from MT6000_cust_build (e.g. next-r4.8.0.rss.mtk-test6.18); blank = auto-discover latest"
         required: false
         type: string
+      build_sdk:
+        description: "Build SDK tarball (significantly increases build time)"
+        required: false
+        type: boolean
+        default: false
       runner:
         description: "Runner to use for the build job"
         required: true
@@ -307,7 +312,7 @@ jobs:
 
           echo "CONFIG_IB=y" >> .config
           echo "CONFIG_IB_STANDALONE=y" >> .config
-          echo "CONFIG_SDK=y" >> .config
+          [[ "${{ inputs.build_sdk }}" == "true" ]] && echo "CONFIG_SDK=y" >> .config || true
           sed -i '/CONFIG_BPF_TOOLCHAIN/d;/CONFIG_USE_LLVM_HOST/d' .config
           echo "CONFIG_BPF_TOOLCHAIN_HOST=y" >> .config
           echo "CONFIG_USE_LLVM_HOST=y" >> .config

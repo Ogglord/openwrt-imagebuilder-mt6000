@@ -216,6 +216,10 @@ jobs:
           TAG="mediatek-filogic-${BRANCH}"
           gh release delete "${TAG}" --cleanup-tag -y --repo "${{ github.repository }}" 2>/dev/null || true
           VERSION="${ASU_VERSION}"
+          ASSETS=(packages-staging.tar.gz)
+          for f in *sdk*.tar.*; do
+            [ -e "$f" ] && ASSETS+=("$f")
+          done
           gh release create "${TAG}" \
             --repo "${{ github.repository }}" \
             --title "ImageBuilder: ${BRANCH}" \
@@ -224,8 +228,7 @@ jobs:
           **Version:** ${VERSION}
           **Image:** \`${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}:${TAG}\`
           **Packages:** https://raw.githubusercontent.com/${{ github.repository }}/releases/${VERSION}/packages/" \
-            packages-staging.tar.gz \
-            *sdk*.tar.*
+            "${ASSETS[@]}"
 
       # profiles.json is already included in the git-based publish above
       # (staged under releases/{version}/targets/mediatek/filogic/) so no
